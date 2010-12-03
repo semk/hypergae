@@ -34,10 +34,13 @@ Options:
                              (Default %(datastore_path)s)
   --use_sqlite               Use the new, SQLite based datastore stub.
                              (Default false)
+  --use_hypertable           Use the new, Hypertable based datastore stub.
+                             (Default false)
   --history_path=PATH        Path to use for storing Datastore history.
                              (Default %(history_path)s)
   --require_indexes          Disallows queries that require composite indexes
                              not defined in index.yaml.
+  --ht_config=HT_CONFIG      Path to hypertable configuration.
   --smtp_host=HOSTNAME       SMTP host to send test mail to.  Leaving this
                              unset will disable SMTP mail sending.
                              (Default '%(smtp_host)s')
@@ -105,12 +108,14 @@ ARG_DATASTORE_PATH = 'datastore_path'
 ARG_MATCHER_PATH = 'matcher_path'
 ARG_CLEAR_MATCHER = 'clear_matcher'
 ARG_USE_SQLITE = 'use_sqlite'
+ARG_USE_HYPERTABLE = 'use_hypertable'
 ARG_DEBUG_IMPORTS = 'debug_imports'
 ARG_ENABLE_SENDMAIL = 'enable_sendmail'
 ARG_SHOW_MAIL_BODY = 'show_mail_body'
 ARG_HISTORY_PATH = 'history_path'
 ARG_LOGIN_URL = 'login_url'
 ARG_LOG_LEVEL = 'log_level'
+ARG_HT_CONFIG = 'ht_config'
 ARG_PORT = 'port'
 ARG_REQUIRE_INDEXES = 'require_indexes'
 ARG_ALLOW_SKIPPED_FILES = 'allow_skipped_files'
@@ -142,6 +147,7 @@ DEFAULT_ARGS = {
   ARG_MATCHER_PATH: os.path.join(tempfile.gettempdir(),
                                  'dev_appserver.matcher'),
   ARG_USE_SQLITE: False,
+  ARG_USE_HYPERTABLE: False,
   ARG_HISTORY_PATH: os.path.join(tempfile.gettempdir(),
                                  'dev_appserver.datastore.history'),
   ARG_LOGIN_URL: '/_ah/login',
@@ -149,6 +155,7 @@ DEFAULT_ARGS = {
   ARG_CLEAR_MATCHER: False,
   ARG_REQUIRE_INDEXES: False,
   ARG_TEMPLATE_DIR: os.path.join(SDK_PATH, 'templates'),
+  ARG_HT_CONFIG: '/opt/hypertable/current/conf/hypertable.cfg',
   ARG_SMTP_HOST: '',
   ARG_SMTP_PORT: 25,
   ARG_SMTP_USER: '',
@@ -261,6 +268,9 @@ def ParseArguments(argv):
 
     if option == '--use_sqlite':
       option_dict[ARG_USE_SQLITE] = True
+   
+    if option == '--use_hypertable':
+      option_dict[ARG_USE_HYPERTALE] = True
 
     if option == '--history_path':
       option_dict[ARG_HISTORY_PATH] = os.path.abspath(value)
@@ -273,6 +283,9 @@ def ParseArguments(argv):
 
     if option == '--require_indexes':
       option_dict[ARG_REQUIRE_INDEXES] = True
+
+    if option == '--ht_config':
+      option_dict[ARG_HT_CONFIG] = value
 
     if option == '--smtp_host':
       option_dict[ARG_SMTP_HOST] = value

@@ -3550,8 +3550,10 @@ def SetupStubs(app_id, **config):
   clear_datastore = config['clear_datastore']
   matcher_path = config.get('matcher_path', '')
   clear_matcher = config.get('clear_matcher', False)
+  use_hypertable = config.get('use_hypertable', False)
   use_sqlite = config.get('use_sqlite', False)
   require_indexes = config.get('require_indexes', False)
+  ht_config = config.get('ht_config')
   smtp_host = config.get('smtp_host', None)
   smtp_port = config.get('smtp_port', 25)
   smtp_user = config.get('smtp_user', '')
@@ -3586,6 +3588,9 @@ def SetupStubs(app_id, **config):
 
   apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
 
+  if use_hypertable:
+    datastore = datastore_hypertable.HypertableStub(
+        app_id, ht_config=ht_config)
   if use_sqlite:
     datastore = datastore_sqlite_stub.DatastoreSqliteStub(
         app_id, datastore_path, require_indexes=require_indexes,
