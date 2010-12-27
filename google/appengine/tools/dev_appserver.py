@@ -103,6 +103,7 @@ from google.appengine.api.matcher import matcher_stub
 from google.appengine.api.memcache import memcache_stub
 from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.datastore import datastore_sqlite_stub
+from google.appengine.datastore import datastore_hypertable
 
 from google.appengine import dist
 

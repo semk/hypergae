@@ -8,17 +8,19 @@
 # Created on 27th March 2010
 
 import logging
-import cPickle as pickle
 import ht
 import threading
 import datetime
 import re
+import array
+import itertools
 
 from google.appengine.api import apiproxy_stub
 from google.appengine.api import datastore, datastore_types, datastore_errors, users
 from google.appengine.datastore import datastore_pb, entity_pb
 from google.appengine.datastore import sortable_pb_encoder
 from google.appengine.datastore import datastore_index
+from google.appengine.datastore import datastore_stub_util
 
 log = logging.getLogger(__name__)
 
@@ -315,23 +317,25 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
    	 }
 
 
-	def __init__(self, app_id, ht_config='/etc/cyclozzo/hypertable.cfg', service_name='datastore_v3'):
+	def __init__(self, app_id, ht_config='/etc/cyclozzo/hypertable.cfg', service_name='datastore_v3', trusted=False):
 		"""
 		Initialize this stub with the service name.
 		"""
-		self._app_id = app_id
-		self._client = ht.Client(ht_config)
+		self.__app_id = app_id
+		self.__client = ht.Client(ht_config)
+		self.__trusted = trusted
 		self.__queries = {}
+
 		super(HypertableStub, self).__init__(service_name)
 
 	def _Create_Obj_Datastore(self, kind):
-		table_name = str('%s_%s' % (self._app_id, kind))
+		table_name = str('%s_%s' % (self.__app_id, kind))
 		try:
-			if not self._app_id or len(self._app_id) == 0:
+			if not self.__app_id or len(self.__app_id) == 0:
 				raise app.NotSignedInError('App id is empty or invalid')
-			table = self._client.open_table(table_name)
+			table = self.__client.open_table(table_name)
 		except RuntimeError:
-			self._client.hql('create table \'%s\' (app, props)' %table_name)
+			self.__client.hql('create table \'%s\' (app, props)' %table_name)
 			log.debug('creating hypertable %s' % table_name)
 		
 	def _AppIdNamespaceKindForKey(self, key):
@@ -363,26 +367,71 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		return buffer(encoder.buffer().tostring())
 
 	@staticmethod
-	def __DecodeIndexPB(encoded):
-		decoder = sortable_pb_encoder.Decoder(buffer(encoded))
-		return decoder.buffer()
+	def __GetEntityKind(key):
+		if isinstance(key, entity_pb.EntityProto):
+			key = key.key()
+		return key.path().element_list()[-1].type()
 
-  	@staticmethod
-  	def __GetEntityKind(key):
-  		if isinstance(key, entity_pb.EntityProto):
-  			key = key.key()
-  		return key.path().element_list()[-1].type()
+	def __ValidateAppId(self, app_id):
+		"""Verify that this is the stub for app_id.
+	
+		Args:
+			app_id: An application ID.
+	
+		Raises:
+			datastore_errors.BadRequestError: if this is not the stub for app_id.
+		"""
+		assert app_id
+		if not self.__trusted and app_id != self.__app_id:
+			raise datastore_errors.BadRequestError(
+					'app %s cannot access app %s\'s data' % (self.__app_id, app_id))
+
+	def __ValidateKey(self, key):
+		"""Validate this key.
+
+		Args:
+			key: entity_pb.Reference
+
+		Raises:
+			datastore_errors.BadRequestError: if the key is invalid
+		"""
+		assert isinstance(key, entity_pb.Reference)
+
+		self.__ValidateAppId(key.app())
+
+		for elem in key.path().element_list():
+			if elem.has_id() == elem.has_name():
+				raise datastore_errors.BadRequestError(
+					'each key path element should have id or name but not both: %r'
+					% key)
 
 	def _Dynamic_Put(self, put_request, put_response):
 		entities = put_request.entity_list()
-		log.debug('entities to store: %r' %entities)
-		# TODO: do the hypertable put operation here
 		log.debug('writing %s entities' % len(entities))
 		kind_cells_dict = {}
 
 		for entity in entities:
+			self.__ValidateKey(entity.key())
+			
+			for prop in itertools.chain(entity.property_list(),
+									entity.raw_property_list()):
+				datastore_stub_util.FillUser(prop)
+
 			assert entity.has_key()
 			assert entity.key().path().element_size() > 0
+			
+			last_path = entity.key().path().element_list()[-1]
+			if last_path.id() == 0 and not last_path.has_name():
+				id_ = self.__AllocateIds(conn, self._GetTablePrefix(entity.key()), 1)
+				last_path.set_id(id_)
+				
+				assert entity.entity_group().element_size() == 0
+				group = entity.mutable_entity_group()
+				root = entity.key().path().element(0)
+				group.add_element().CopyFrom(root)
+			else:
+				assert (entity.has_entity_group() and
+					entity.entity_group().element_size() > 0)
 			
 			kind = self.__GetEntityKind(entity)
 			# create table for this kind if not created already.
@@ -395,20 +444,24 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 		put_keys = []
 		for kind in kind_cells_dict.keys():
-			table_name = str('%s_%s' % (self._app_id, kind))
-			table = self._client.open_table(table_name)
+			table_name = str('%s_%s' % (self.__app_id, kind))
+			table = self.__client.open_table(table_name)
 			mutator = table.create_mutator()
 
 			entities = kind_cells_dict[kind]
 			for entity in entities:
 				# generate the key for this entity
-				encoded_key = str(datastore_types.Key._FromPb(entity.key()))#self.__EncodeIndexPB(entity.key().path())
+				encoded_key = str(datastore_types.Key._FromPb(entity.key()))
+				#key_path = str(self.__EncodeIndexPB(entity.key().path()))
+				#log.debug('__path__: %s' %repr(key_path))
 				mutator.set(encoded_key, 'app', 'type', kind)
-				log.debug('key: %s' %encoded_key)
-				for property in entity.property_list():
+				#mutator.set(encoded_key, 'app', '__path__', key_path)
+				#mutator.set(encoded_key, 'app', 'entity', str(buffer(entity.Encode())))
+				for property in entity.property_list() + entity.raw_property_list():
 					# set the entity cells with key info
 					property_name = property.name()
-					property_value = str(property.value)
+					property_value = str(self.__EncodeIndexPB(property.value()))
+					logging.debug('storing property %s with value %s' %(property_name, repr(property_value)))
 					mutator.set(encoded_key, 'props', property_name, property_value)
 					mutator.flush()
 				put_keys.append(entity.key())
@@ -417,29 +470,27 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 	
 	def _Dynamic_Delete(self, delete_request, delete_response):
-		keys = delete_request.key_list()
+		keys = [datastore_types.Key._FromPb(key) for key in delete_request.key_list()]
 		log.debug('deleting %s entities' % len(keys))
 		kind_keys_dict = {}
-		
 		for key in keys:
-			kind = self._AppIdNamespaceKindForKey(key)[1]
-			key = key.Encode()
-			if kind_keys_dict.has_key(kind):
-				kind_keys_dict[kind].append(key)
+			if kind_keys_dict.has_key(key.kind()):
+				kind_keys_dict[key.kind()].append(key)
 			else:
-				kind_keys_dict[kind] = [key]
+				kind_keys_dict[key.kind()] = [key]
 
 		for kind in kind_keys_dict:
-			table_name = str('%s_%s' % (self._app_id, kind))
-			table = self._client.open_table(table_name)
-			for this_key in kind_keys_dict[kind]:
-				log.debug('deleting cells with key: %s' %re.escape(this_key))
+			table_name = str('%s_%s' % (self.__app_id, kind))
+			table = self.__client.open_table(table_name)
+			this_kind_keys = [str(key) for key in kind_keys_dict[kind]]
+			for this_key in this_kind_keys:
+				log.debug('deleting cells with key: %s' %this_key)
 				#FIXME: mutator doesn't support deletion only with keys
 				#mutator = table.create_mutator()
 				# delete cells with this key
 				#mutator.set_delete(this_key, 'app', '')
 				#mutator.set_delete(this_key, 'props', '')
-				self._client.hql('delete * from \'%s\' where row=\"%s\"' %(table_name, str(this_key)))
+				self.__client.hql('delete * from \'%s\' where row=\"%s\"' %(table_name, this_key))
 	
 	def _Dynamic_Get(self, get_request, get_response):
 		keys = get_request.key_list()
@@ -454,9 +505,10 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		
 		entities = []
 		for kind in kind_keys_dict:
-			table_name = str('%s_%s' % (self._app_id, kind))
-			table = self._client.open_table(table_name)
+			table_name = str('%s_%s' % (self.__app_id, kind))
+			table = self.__client.open_table(table_name)
 			for key in kind_keys_dict[kind]:
+				key_pb = key
 				key = datastore_types.Key._FromPb(key)
 				scan_spec_builder = ht.ScanSpecBuilder()
 				scan_spec_builder.add_row_interval(str(key), True, str(key), True)
@@ -464,15 +516,21 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				scan_spec_builder.set_row_limit(0)
 				total_cells = [cell for cell in table.create_scanner(scan_spec_builder)]
 
-				# make cells with same keys as a single entity
-				entity = datastore.Entity(kind, _app=self._app_id, name=key.name(), id=key.id())
+				entity_proto = entity_pb.EntityProto()
+				entity_proto.mutable_key().CopyFrom(key_pb)
 				for cell in total_cells:
 					if cell.column_family == 'props':
-						entity[cell.column_qualifier] = cell.value
+						prop_pb = entity_proto.add_property()
+						prop_pb.set_name(cell.column_qualifier.encode('utf-8'))
+						prop_pb.set_multiple(False)
+						log.debug('cell.value: %s' %repr(cell.value))
+						value_decoder = sortable_pb_encoder.Decoder(
+											array.array('B', str(cell.value)))
+						value_pb = prop_pb.mutable_value()
+						value_pb.Merge(value_decoder)
 				group = get_response.add_entity()
-				#FIXME: as datastore.Get is expecting a protobuf-encoded entities
-				group.mutable_entity().CopyFrom(entity.ToPb())
-	
+				group.mutable_entity().CopyFrom(entity_proto)
+
 	def _Dynamic_RunQuery(self, query, query_result):
 		kind = query.kind()
 		keys_only = query.keys_only()
@@ -483,8 +541,8 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		namespace = query.name_space()
 		#predicate = query.predicate()
 		
-		table_name = str('%s_%s' % (self._app_id, kind))
-		table = self._client.open_table(table_name)
+		table_name = str('%s_%s' % (self.__app_id, kind))
+		table = self.__client.open_table(table_name)
 		scan_spec_builder = ht.ScanSpecBuilder()
 		scan_spec_builder.set_max_versions(1)
 		if filters or orders:
@@ -501,19 +559,30 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				key_cell_dict[cell.row_key].append(cell)
 			else:
 				key_cell_dict[cell.row_key] = [cell]
-
-		results = []
+				
+		pb_entities = []
 		for key in key_cell_dict:
 			key_obj = datastore_types.Key(encoded=key)
-			entity = datastore.Entity(kind, _app=self._app_id, name=key_obj.name(), id=key_obj.id())
+			key_pb = key_obj._ToPb()
+			entity_proto = entity_pb.EntityProto()
+			entity_proto.mutable_key().CopyFrom(key_pb)
 			for cell in key_cell_dict[key]:
 				if cell.column_family == 'props':
-					entity[cell.column_qualifier] = str(self.__DecodeIndexPB(cell.value))
-			results.append(entity)
+					prop_pb = entity_proto.add_property()
+					prop_pb.set_name(cell.column_qualifier.encode('utf-8'))
+					prop_pb.set_multiple(False)
+					log.debug('cell.value: %s' %repr(cell.value))
+					value_decoder = sortable_pb_encoder.Decoder(
+										array.array('B', str(cell.value)))
+					value_pb = prop_pb.mutable_value()
+					value_pb.Merge(value_decoder)
+			pb_entities.append(entity_proto)
+		
+		results = map(lambda entity: datastore.Entity.FromPb(entity), pb_entities)
 	
-		query.set_app(self._app_id)
+		query.set_app(self.__app_id)
 		datastore_types.SetNamespace(query, namespace)
-		encoded = datastore_types.EncodeAppIdNamespace(self._app_id, namespace)
+		encoded = datastore_types.EncodeAppIdNamespace(self.__app_id, namespace)
 	
 		operators = {datastore_pb.Query_Filter.LESS_THAN:			 '<',
 					 datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:	'<=',
