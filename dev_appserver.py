@@ -44,6 +44,9 @@ EXTRA_PATHS = [
   os.path.join(DIR_PATH, 'lib', 'ipaddr'),
   os.path.join(DIR_PATH, 'lib', 'webob'),
   os.path.join(DIR_PATH, 'lib', 'yaml', 'lib'),
+  os.path.join(DIR_PATH, 'lib', 'thrift'),
+  os.path.join(DIR_PATH, 'lib', 'thriftclient'),
+  os.path.join(DIR_PATH, 'lib', 'hyperthrift'),
 ]
 
 SCRIPT_EXCEPTIONS = {
