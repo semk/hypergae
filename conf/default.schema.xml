@@ -1,0 +1,12 @@
+<Schema>
+  <AccessGroup name="default">
+    <ColumnFamily>
+      <Name>meta</Name>
+      <deleted>false</deleted>
+    </ColumnFamily>
+    <ColumnFamily>
+      <Name>entity</Name>
+      <deleted>false</deleted>
+    </ColumnFamily>
+  </AccessGroup>
+</Schema>
