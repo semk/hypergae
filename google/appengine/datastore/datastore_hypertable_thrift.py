@@ -24,6 +24,9 @@ from google.appengine.datastore import sortable_pb_encoder
 from google.appengine.datastore import datastore_index
 from google.appengine.datastore import datastore_stub_util
 
+import __builtin__
+buffer = __builtin__.buffer
+
 log = logging.getLogger(__name__)
 
 _MAXIMUM_RESULTS = 1000
