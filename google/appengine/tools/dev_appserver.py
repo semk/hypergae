@@ -103,7 +103,8 @@ from google.appengine.api.matcher import matcher_stub
 from google.appengine.api.memcache import memcache_stub
 from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.datastore import datastore_sqlite_stub
-from google.appengine.datastore import datastore_hypertable
+#from google.appengine.datastore import datastore_hypertable_ht
+from google.appengine.datastore import datastore_hypertable_thrift
 
 from google.appengine import dist
 
@@ -3590,9 +3591,23 @@ def SetupStubs(app_id, **config):
   apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
 
   if use_hypertable:
-    datastore = datastore_hypertable.HypertableStub(
-        app_id, ht_config=ht_config)
-  if use_sqlite:
+    # use thrift provider by default incase of hypertable storage
+    default_schema = os.path.join(
+                        os.path.dirname(
+                            os.path.dirname(
+                                os.path.dirname(
+                                    os.path.dirname(os.path.abspath(__file__))
+                                    )
+                                )
+                            ),
+                        'conf/default.schema.xml')
+    schema = config.get('default_schema', default_schema)
+    thrift_address = config.get('thrift_address', '127.0.0.1')
+    thrift_port = int(config.get('thrift_port', 38080))
+    datastore = datastore_hypertable_thrift.HypertableStub(
+        app_id, schema=schema, thrift_address=thrift_address,
+        thrift_port=thrift_port)
+  elif use_sqlite:
     datastore = datastore_sqlite_stub.DatastoreSqliteStub(
         app_id, datastore_path, require_indexes=require_indexes,
         trusted=trusted)

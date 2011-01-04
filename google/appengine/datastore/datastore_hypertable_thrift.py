@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 #
 # Datastore implementation for Hypertable.
-#	It should be registered by 
+#	It should be registered by
 #		apiproxy_stub_map.apiproxy.RegisterStub('datastore', DatastoreStub())
 #
 # @author: Sreejith K
@@ -321,8 +321,8 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 	def __init__(self, app_id, schema='/etc/cyclozzo/default.schema.xml',
 				thrift_address='127.0.0.1',
-				thrift_port='38080', 
-				service_name='datastore_v3', 
+				thrift_port='38080',
+				service_name='datastore_v3',
 				trusted=False):
 		"""
 		Initialize this stub with the service name.
@@ -353,16 +353,16 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				schema += line
 			client.create_table(table_name, schema)
 			log.debug('creating hypertable %s' % table_name)
-		
+
 	def _AppIdNamespaceKindForKey(self, key):
 		""" Get (app, kind) tuple from given key.
-	
+
 		The (app, kind) tuple is used as an index into several internal
 		dictionaries, e.g. __entities.
-	
+
 		Args:
 			key: entity_pb.Reference
-	
+
 		Returns:
 			Tuple (app, kind), both are unicode strings.
 		"""
@@ -390,10 +390,10 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 	def __ValidateAppId(self, app_id):
 		"""Verify that this is the stub for app_id.
-	
+
 		Args:
 			app_id: An application ID.
-	
+
 		Raises:
 			datastore_errors.BadRequestError: if this is not the stub for app_id.
 		"""
@@ -432,19 +432,19 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 		for entity in entities:
 			self.__ValidateKey(entity.key())
-			
+
 			for prop in itertools.chain(entity.property_list(),
 									entity.raw_property_list()):
 				datastore_stub_util.FillUser(prop)
 
 			assert entity.has_key()
 			assert entity.key().path().element_size() > 0
-			
+
 			last_path = entity.key().path().element_list()[-1]
 			if last_path.id() == 0 and not last_path.has_name():
 				#id_ = self.__AllocateIds(conn, self._GetTablePrefix(entity.key()), 1)
 				#last_path.set_id(id_)
-				
+
 				assert entity.entity_group().element_size() == 0
 				group = entity.mutable_entity_group()
 				root = entity.key().path().element(0)
@@ -452,11 +452,11 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			else:
 				assert (entity.has_entity_group() and
 					entity.entity_group().element_size() > 0)
-			
+
 			kind = self.__GetEntityKind(entity)
 			# create table for this kind if not created already.
 			self._Create_Obj_Datastore(client, kind)
-			
+
 			if kind_cells_dict.has_key(kind):
 				kind_cells_dict[kind].append(entity)
 			else:
@@ -484,22 +484,22 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				meta_cell1 = Cell(
 									Key(
 										row = encoded_key,
-										column_family = 'meta', 
-										column_qualifier = 'kind', 
+										column_family = 'meta',
+										column_qualifier = 'kind',
 										flag = 255),
 									kind)
 				meta_cell2 = Cell(
 									Key(
 										row = encoded_key,
-										column_family = 'meta', 
-										column_qualifier = 'app', 
+										column_family = 'meta',
+										column_qualifier = 'app',
 										flag = 255),
 									self.__app_id)
 				entity_cell = Cell(
 									Key(
 										row = encoded_key,
-										column_family = 'entity', 
-										column_qualifier = 'proto', 
+										column_family = 'entity',
+										column_qualifier = 'proto',
 										flag = 255),
 									str(buffer(entity.Encode())))
 				client.set_cell(mutator, meta_cell1)
@@ -511,7 +511,7 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		log.debug('done.')
 		put_response.key_list().extend(put_keys)
 
-	
+
 	def _Dynamic_Delete(self, delete_request, delete_response):
 		client = self._GetThriftClient()
 		keys = [datastore_types.Key._FromPb(key) for key in delete_request.key_list()]
@@ -544,12 +544,12 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		table_name = str('%s_%s' % (self.__app_id, kind))
 		client.drop_table(table_name, 1)
 		client.close()
-	
+
 	def _Dynamic_Get(self, get_request, get_response):
 		client = self._GetThriftClient()
 		keys = get_request.key_list()
 		kind_keys_dict = {}
-		
+
 		for key in keys:
 			kind = self._AppIdNamespaceKindForKey(key)[1]
 			if kind_keys_dict.has_key(kind):
@@ -603,14 +603,14 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		limit = query.limit()
 		namespace = query.name_space()
 		#predicate = query.predicate()
-		
+
 		table_name = str('%s_%s' % (self.__app_id, kind))
-		
+
 		if filters or orders:
 			row_limit = 0
 		else:
 			row_limit = offset + limit
-		
+
 		try:
 			scanner_id = client.open_scanner(table_name,
 											ScanSpec(columns = ['meta', 'entity'],
@@ -628,11 +628,14 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 					break
 		except ClientException:
 			log.warning('No data for %s' %table_name)
-			client.close_scanner(scanner_id)
 			client.close()
 			return
-		client.close_scanner(scanner_id)
-		
+		finally:
+			try:
+				client.close_scanner(scanner_id)
+			except:
+				pass
+
 		# make a cell-key dictionary
 		key_cell_dict = {}
 		for cell in total_cells:
@@ -640,7 +643,7 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				key_cell_dict[cell.key.row].append(cell)
 			else:
 				key_cell_dict[cell.key.row] = [cell]
-				
+
 		pb_entities = []
 		for key in key_cell_dict:
 			key_obj = datastore_types.Key(encoded=key)
@@ -650,63 +653,63 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 					entity_proto = entity_pb.EntityProto(str(cell.value))
 					entity_proto.mutable_key().CopyFrom(key_pb)
 					pb_entities.append(entity_proto)
-		
+
 		results = map(lambda entity: datastore.Entity.FromPb(entity), pb_entities)
-	
+
 		query.set_app(self.__app_id)
 		datastore_types.SetNamespace(query, namespace)
 		encoded = datastore_types.EncodeAppIdNamespace(self.__app_id, namespace)
-	
+
 		operators = {datastore_pb.Query_Filter.LESS_THAN:			 '<',
 					 datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:	'<=',
 					 datastore_pb.Query_Filter.GREATER_THAN:			'>',
 					 datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL: '>=',
 					 datastore_pb.Query_Filter.EQUAL:				 '==',
 					 }
-	
+
 		def has_prop_indexed(entity, prop):
 			"""Returns True if prop is in the entity and is indexed."""
 			if prop in datastore_types._SPECIAL_PROPERTIES:
 				return True
 			elif prop in entity.unindexed_properties():
 				return False
-	
+
 			values = entity.get(prop, [])
 			if not isinstance(values, (tuple, list)):
 				values = [values]
-	
+
 			for value in values:
 				if type(value) not in datastore_types._RAW_PROPERTY_TYPES:
 					return True
 			return False
-	
+
 		for filt in filters:
 			assert filt.op() != datastore_pb.Query_Filter.IN
-	
+
 			prop = filt.property(0).name().decode('utf-8')
 			op = operators[filt.op()]
-	
+
 			filter_val_list = [datastore_types.FromPropertyPb(filter_prop)
 							 for filter_prop in filt.property_list()]
-	
+
 			def passes_filter(entity):
 				"""Returns True if the entity passes the filter, False otherwise.
-		
+
 				The filter being evaluated is filt, the current filter that we're on
 				in the list of filters in the query.
 				"""
 				log.debug('filter check for entity: %r' %entity)
 				if not has_prop_indexed(entity, prop):
 					return False
-		
+
 				try:
 					entity_vals = datastore._GetPropertyValue(entity, prop)
 				except KeyError:
 					entity_vals = []
-		
+
 				if not isinstance(entity_vals, list):
 					entity_vals = [entity_vals]
-		
+
 				for fixed_entity_val in entity_vals:
 					for filter_val in filter_val_list:
 						fixed_entity_type = self._PROPERTY_TYPE_TAGS.get(
@@ -718,26 +721,26 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 							comp = '%r %s %r' % (fixed_entity_type, op, filter_type)
 						else:
 							continue
-		
+
 						logging.log(logging.DEBUG - 1,
 								'Evaling filter expression "%s"', comp)
-		
+
 						try:
 							ret = eval(comp)
 							if ret and ret != NotImplementedError:
 								return True
 						except TypeError:
 							pass
-		
+
 				return False
-	
+
 			results = filter(passes_filter, results)
 		log.debug('entity list after filter operation: %r' %results)
-	
+
 		for order in orders:
 			prop = order.property().decode('utf-8')
 			results = [entity for entity in results if has_prop_indexed(entity, prop)]
-	
+
 		def order_compare_entities(a, b):
 			""" Return a negative, zero or positive number depending on whether
 			entity a is considered smaller than, equal to, or larger than b,
@@ -745,28 +748,28 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			cmped = 0
 			for o in orders:
 				prop = o.property().decode('utf-8')
-		
+
 				reverse = (o.direction() is datastore_pb.Query_Order.DESCENDING)
-		
+
 				a_val = datastore._GetPropertyValue(a, prop)
 				if isinstance(a_val, list):
 					a_val = sorted(a_val, order_compare_properties, reverse=reverse)[0]
-		
+
 				b_val = datastore._GetPropertyValue(b, prop)
 				if isinstance(b_val, list):
 					b_val = sorted(b_val, order_compare_properties, reverse=reverse)[0]
-		
+
 				cmped = order_compare_properties(a_val, b_val)
-		
+
 				if o.direction() is datastore_pb.Query_Order.DESCENDING:
 					cmped = -cmped
-	
+
 				if cmped != 0:
 					return cmped
-	
+
 			if cmped == 0:
 				return cmp(a.key(), b.key())
-	
+
 		def order_compare_properties(x, y):
 			"""Return a negative, zero or positive number depending on whether
 			property value x is considered smaller than, equal to, or larger than
@@ -778,10 +781,10 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				x = datastore_types.DatetimeToTimestamp(x)
 			if isinstance(y, datetime.datetime):
 				y = datastore_types.DatetimeToTimestamp(y)
-	
+
 			x_type = self._PROPERTY_TYPE_TAGS.get(x.__class__)
 			y_type = self._PROPERTY_TYPE_TAGS.get(y.__class__)
-	
+
 			if x_type == y_type:
 				try:
 					return cmp(x, y)
@@ -789,48 +792,48 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 					return 0
 			else:
 				return cmp(x_type, y_type)
-	
+
 		results.sort(order_compare_entities)
 
 		cursor = _Cursor(query, results, order_compare_entities)
 		self.__queries[cursor.cursor] = cursor
-	
+
 		if query.has_count():
 			count = query.count()
 		elif query.has_limit():
 			count = query.limit()
 		else:
 			count = _BATCH_SIZE
-	
+
 		cursor.PopulateQueryResult(query_result, count,
 									 query.offset(), compile=query.compile())
-	
+
 		if query.compile():
 			compiled_query = query_result.mutable_compiled_query()
 			compiled_query.set_keys_only(query.keys_only())
 			compiled_query.mutable_primaryscan().set_index_name(query.Encode())
 		client.close()
-	
+
 	def _Dynamic_Next(self, next_request, query_result):
 		self.__ValidateAppId(next_request.cursor().app())
-	
+
 		cursor_handle = next_request.cursor().cursor()
-	
+
 		try:
 			cursor = self.__queries[cursor_handle]
 		except KeyError:
 			raise apiproxy_errors.ApplicationError(
 				datastore_pb.Error.BAD_REQUEST, 'Cursor %d not found' % cursor_handle)
-	
+
 		assert cursor.app == next_request.cursor().app()
-	
+
 		count = _BATCH_SIZE
 		if next_request.has_count():
 			count = next_request.count()
 		cursor.PopulateQueryResult(query_result,
 									 count, next_request.offset(),
 									 next_request.compile())
-	
+
 	def _Dynamic_Count(self, query, integer64proto):
 		query_result = datastore_pb.QueryResult()
 		self._Dynamic_RunQuery(query, query_result)

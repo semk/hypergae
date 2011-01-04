@@ -270,9 +270,9 @@ def ParseArguments(argv):
 
     if option == '--use_sqlite':
       option_dict[ARG_USE_SQLITE] = True
-   
+
     if option == '--use_hypertable':
-      option_dict[ARG_USE_HYPERTALE] = True
+      option_dict[ARG_USE_HYPERTABLE] = True
 
     if option == '--history_path':
       option_dict[ARG_HISTORY_PATH] = os.path.abspath(value)
