@@ -519,7 +519,12 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		entities = []
 		for kind in kind_keys_dict:
 			table_name = str('%s_%s' % (self.__app_id, kind))
-			table = self.__client.open_table(table_name)
+			try:
+				table = self.__client.open_table(table_name)
+			except RuntimeError:
+				log.warning('No data for %s' %table_name)
+				continue
+
 			for key in kind_keys_dict[kind]:
 				key_pb = key
 				key = datastore_types.Key._FromPb(key)
@@ -547,7 +552,12 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		#predicate = query.predicate()
 		
 		table_name = str('%s_%s' % (self.__app_id, kind))
-		table = self.__client.open_table(table_name)
+		try:
+			table = self.__client.open_table(table_name)
+		except RuntimeError:
+			log.warning('No data for %s' %table_name)
+			return
+
 		scan_spec_builder = ht.ScanSpecBuilder()
 		scan_spec_builder.set_max_versions(1)
 		if filters or orders:

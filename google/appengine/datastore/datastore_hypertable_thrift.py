@@ -556,30 +556,33 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				kind_keys_dict[kind].append(key)
 			else:
 				kind_keys_dict[kind] = [key]
-		
-		entities = []
+
 		for kind in kind_keys_dict:
 			table_name = str('%s_%s' % (self.__app_id, kind))
 			for key in kind_keys_dict[kind]:
 				total_cells = []
 				key_pb = key
 				key = datastore_types.Key._FromPb(key)
-				row_spec = RowInterval(start_row = str(key),
-									start_inclusive = True,
-									end_row = str(key),
-									end_inclusive = True)
-				scanner_id = client.open_scanner(table_name,
-												ScanSpec(columns = ['meta', 'entity'],
-														row_intervals = [row_spec],
-														row_limit = 0,
-														revs = 1),
-												True);
-				while True:
-					cells = client.next_cells(scanner_id)
-					if len(cells) > 0:
-						total_cells += cells
-					else:
-						break
+				try:
+					row_spec = RowInterval(start_row = str(key),
+										start_inclusive = True,
+										end_row = str(key),
+										end_inclusive = True)
+					scanner_id = client.open_scanner(table_name,
+													ScanSpec(columns = ['meta', 'entity'],
+															row_intervals = [row_spec],
+															row_limit = 0,
+															revs = 1),
+													True);
+
+					while True:
+						cells = client.next_cells(scanner_id)
+						if len(cells) > 0:
+							total_cells += cells
+						else:
+							break
+				except ClientException:
+					log.warning('No data for %s' %table_name)
 				client.close_scanner(scanner_id)
 
 				for cell in total_cells:
@@ -608,19 +611,26 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		else:
 			row_limit = offset + limit
 		
-		scanner_id = client.open_scanner(table_name,
-										ScanSpec(columns = ['meta', 'entity'],
-												row_limit = row_limit,
-												revs = 1,
-												keys_only = keys_only),
-										True);
-		total_cells = []
-		while True:
-			cells = client.next_cells(scanner_id)
-			if len(cells) > 0:
-				total_cells += cells
-			else:
-				break
+		try:
+			scanner_id = client.open_scanner(table_name,
+											ScanSpec(columns = ['meta', 'entity'],
+													row_limit = row_limit,
+													revs = 1,
+													keys_only = keys_only),
+											True);
+			total_cells = []
+
+			while True:
+				cells = client.next_cells(scanner_id)
+				if len(cells) > 0:
+					total_cells += cells
+				else:
+					break
+		except ClientException:
+			log.warning('No data for %s' %table_name)
+			client.close_scanner(scanner_id)
+			client.close()
+			return
 		client.close_scanner(scanner_id)
 		
 		# make a cell-key dictionary
@@ -799,6 +809,7 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			compiled_query = query_result.mutable_compiled_query()
 			compiled_query.set_keys_only(query.keys_only())
 			compiled_query.mutable_primaryscan().set_index_name(query.Encode())
+		client.close()
 	
 	def _Dynamic_Next(self, next_request, query_result):
 		self.__ValidateAppId(next_request.cursor().app())
