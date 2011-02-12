@@ -1,8 +1,8 @@
 #! /usr/bin/env python
 #
 # Datastore implementation for Hypertable.
-# It should be registered by
-#   apiproxy_stub_map.apiproxy.RegisterStub('datastore', DatastoreStub())
+#	It should be registered by 
+#		apiproxy_stub_map.apiproxy.RegisterStub('datastore', DatastoreStub())
 #
 # @author: Sreejith K
 # Created on 27th March 2010
@@ -23,6 +23,7 @@ from google.appengine.datastore import datastore_pb, entity_pb
 from google.appengine.datastore import sortable_pb_encoder
 from google.appengine.datastore import datastore_index
 from google.appengine.datastore import datastore_stub_util
+from google.appengine.api import namespace_manager
 
 import __builtin__
 buffer = __builtin__.buffer
@@ -296,548 +297,537 @@ class _Cursor(object):
 
 class HypertableStub(apiproxy_stub.APIProxyStub):
 
-  _PROPERTY_TYPE_TAGS = {
-    datastore_types.Blob: entity_pb.PropertyValue.kstringValue,
-    bool: entity_pb.PropertyValue.kbooleanValue,
-    datastore_types.Category: entity_pb.PropertyValue.kstringValue,
-    datetime.datetime: entity_pb.PropertyValue.kint64Value,
-    datastore_types.Email: entity_pb.PropertyValue.kstringValue,
-    float: entity_pb.PropertyValue.kdoubleValue,
-    datastore_types.GeoPt: entity_pb.PropertyValue.kPointValueGroup,
-    datastore_types.IM: entity_pb.PropertyValue.kstringValue,
-    int: entity_pb.PropertyValue.kint64Value,
-    datastore_types.Key: entity_pb.PropertyValue.kReferenceValueGroup,
-    datastore_types.Link: entity_pb.PropertyValue.kstringValue,
-    long: entity_pb.PropertyValue.kint64Value,
-    datastore_types.PhoneNumber: entity_pb.PropertyValue.kstringValue,
-    datastore_types.PostalAddress: entity_pb.PropertyValue.kstringValue,
-    datastore_types.Rating: entity_pb.PropertyValue.kint64Value,
-    str: entity_pb.PropertyValue.kstringValue,
-    datastore_types.Text: entity_pb.PropertyValue.kstringValue,
-    type(None): 0,
-    unicode: entity_pb.PropertyValue.kstringValue,
-    users.User: entity_pb.PropertyValue.kUserValueGroup,
-     }
-
-
-  def __init__(self, app_id, schema='/etc/cyclozzo/default.schema.xml',
-        thrift_address='127.0.0.1',
-        thrift_port='38080',
-        service_name='datastore_v3',
-        trusted=False):
-    """
-    Initialize this stub with the service name.
-    """
-    self.__app_id = app_id
-    self.__schema = schema
-    self.__thrift_address = thrift_address
-    self.__thrift_port = thrift_port
-    self.__trusted = trusted
-    self.__queries = {}
-
-    super(HypertableStub, self).__init__(service_name)
-
-  def _GetThriftClient(self):
-    """Get a new Thrift connection"""
-    return ThriftClient(self.__thrift_address, self.__thrift_port)
-
-  def _Create_Obj_Datastore(self, client, kind):
-    table_name = str('%s_%s' % (self.__app_id, kind))
-    try:
-      if not self.__app_id or len(self.__app_id) == 0:
-        raise app.NotSignedInError('App id is empty or invalid')
-      table = client.get_table_id(table_name)
-    except ClientException, e:
-      cfg = open(self.__schema, 'r')
-      schema = ''
-      for line in cfg.readlines():
-        schema += line
-      client.create_table(table_name, schema)
-      logging.debug('creating hypertable %s' % table_name)
-
-  def _AppIdNamespaceKindForKey(self, key):
-    """ Get (app, kind) tuple from given key.
-
-    The (app, kind) tuple is used as an index into several internal
-    dictionaries, e.g. __entities.
-
-    Args:
-      key: entity_pb.Reference
-
-    Returns:
-      Tuple (app, kind), both are unicode strings.
-    """
-    last_path = key.path().element_list()[-1]
-    return (datastore_types.EncodeAppIdNamespace(key.app(), key.name_space()),
-        last_path.type())
-
-  @staticmethod
-  def __EncodeIndexPB(pb):
-    if isinstance(pb, entity_pb.PropertyValue) and pb.has_uservalue():
-      userval = entity_pb.PropertyValue()
-      userval.mutable_uservalue().set_email(pb.uservalue().email())
-      userval.mutable_uservalue().set_auth_domain(pb.uservalue().auth_domain())
-      userval.mutable_uservalue().set_gaiaid(0)
-      pb = userval
-    encoder = sortable_pb_encoder.Encoder()
-    pb.Output(encoder)
-    return buffer(encoder.buffer().tostring())
-
-  @staticmethod
-  def __GetEntityKind(key):
-    if isinstance(key, entity_pb.EntityProto):
-      key = key.key()
-    return key.path().element_list()[-1].type()
-
-  def __ValidateAppId(self, app_id):
-    """Verify that this is the stub for app_id.
-
-    Args:
-      app_id: An application ID.
-
-    Raises:
-      datastore_errors.BadRequestError: if this is not the stub for app_id.
-    """
-    assert app_id
-    if not self.__trusted and app_id != self.__app_id:
-      raise datastore_errors.BadRequestError(
-          'app %s cannot access app %s\'s data' % (self.__app_id, app_id))
-
-  def __ValidateKey(self, key):
-    """Validate this key.
-
-    Args:
-      key: entity_pb.Reference
-
-    Raises:
-      datastore_errors.BadRequestError: if the key is invalid
-    """
-    assert isinstance(key, entity_pb.Reference)
-
-    self.__ValidateAppId(key.app())
-
-    for elem in key.path().element_list():
-      if elem.has_id() == elem.has_name():
-        raise datastore_errors.BadRequestError(
-          'each key path element should have id or name but not both: %r'
-          % key)
-
-  def __GenerateNewKey(self, kind):
-    return datastore_types.Key.from_path( kind, str(uuid.uuid4()).replace('-', '')[:10] )
-
-  def _Dynamic_Put(self, put_request, put_response):
-    client = self._GetThriftClient()
-    entities = put_request.entity_list()
-    logging.debug('writing %s entities' % len(entities))
-    kind_cells_dict = {}
-
-    for entity in entities:
-      self.__ValidateKey(entity.key())
-
-      for prop in itertools.chain(entity.property_list(),
-                  entity.raw_property_list()):
-        datastore_stub_util.FillUser(prop)
-
-      assert entity.has_key()
-      assert entity.key().path().element_size() > 0
-
-      last_path = entity.key().path().element_list()[-1]
-      if last_path.id() == 0 and not last_path.has_name():
-        #id_ = self.__AllocateIds(conn, self._GetTablePrefix(entity.key()), 1)
-        #last_path.set_id(id_)
-
-        assert entity.entity_group().element_size() == 0
-        group = entity.mutable_entity_group()
-        root = entity.key().path().element(0)
-        group.add_element().CopyFrom(root)
-      else:
-        assert (entity.has_entity_group() and
-          entity.entity_group().element_size() > 0)
-
-      kind = self.__GetEntityKind(entity)
-      # create table for this kind if not created already.
-      self._Create_Obj_Datastore(client, kind)
-
-      if kind_cells_dict.has_key(kind):
-        kind_cells_dict[kind].append(entity)
-      else:
-        kind_cells_dict[kind] = [entity]
-
-    put_keys = []
-    for kind in kind_cells_dict.keys():
-      table_name = str('%s_%s' % (self.__app_id, kind))
-      mutator = client.open_mutator(table_name, 0, 0)
-
-      entities = kind_cells_dict[kind]
-      for entity in entities:
-        try:
-          logging.debug('using provided key')
-          key = datastore_types.Key._FromPb(entity.key())
-          # encode the key
-          encoded_key = str(key)
-        except datastore_errors.BadKeyError:
-          logging.debug('generating a new key')
-          # generate the key for this entity
-          key = self.__GenerateNewKey(kind)
-          # encode the key
-          encoded_key = str(key)
-        logging.debug('encoded key: %r' %encoded_key)
-        meta_cell1 = Cell(
-                  Key(
-                    row = encoded_key,
-                    column_family = 'meta',
-                    column_qualifier = 'kind',
-                    flag = 255),
-                  kind)
-        meta_cell2 = Cell(
-                  Key(
-                    row = encoded_key,
-                    column_family = 'meta',
-                    column_qualifier = 'app',
-                    flag = 255),
-                  self.__app_id)
-        entity_cell = Cell(
-                  Key(
-                    row = encoded_key,
-                    column_family = 'entity',
-                    column_qualifier = 'proto',
-                    flag = 255),
-                  str(buffer(entity.Encode())))
-        client.set_cell(mutator, meta_cell1)
-        client.set_cell(mutator, meta_cell2)
-        client.set_cell(mutator, entity_cell)
-        put_keys.append(key._ToPb())
-      client.close_mutator(mutator, True);
-    client.close()
-    logging.debug('done.')
-    put_response.key_list().extend(put_keys)
-
-
-  def _Dynamic_Delete(self, delete_request, delete_response):
-    client = self._GetThriftClient()
-    keys = [datastore_types.Key._FromPb(key) for key in delete_request.key_list()]
-    logging.debug('deleting %s entities' % len(keys))
-    kind_keys_dict = {}
-    for key in keys:
-      if kind_keys_dict.has_key(key.kind()):
-        kind_keys_dict[key.kind()].append(key)
-      else:
-        kind_keys_dict[key.kind()] = [key]
-
-    for kind in kind_keys_dict:
-      table_name = str('%s_%s' % (self.__app_id, kind))
-      mutator = client.open_mutator(table_name, 0, 0)
-      this_kind_keys = [str(key) for key in kind_keys_dict[kind]]
-      for this_key in this_kind_keys:
-        logging.debug('deleting cells with key: %s' %this_key)
-        this_key_cells = Cell(
-                  Key(
-                    row = this_key,
-                    flag = 0),
-                  )
-        client.set_cells(mutator, [this_key_cells])
-      client.close_mutator(mutator, True);
-    client.close()
-
-  def _Dynamic_Drop(self, drop_request, drop_response):
-    client = self._GetThriftClient()
-    kind = drop_request.kind
-    table_name = str('%s_%s' % (self.__app_id, kind))
-    client.drop_table(table_name, 1)
-    client.close()
-
-  def _Dynamic_Get(self, get_request, get_response):
-    client = self._GetThriftClient()
-    keys = get_request.key_list()
-    kind_keys_dict = {}
-
-    for key in keys:
-      kind = self._AppIdNamespaceKindForKey(key)[1]
-      if kind_keys_dict.has_key(kind):
-        kind_keys_dict[kind].append(key)
-      else:
-        kind_keys_dict[kind] = [key]
-
-    for kind in kind_keys_dict:
-      table_name = str('%s_%s' % (self.__app_id, kind))
-      for key in kind_keys_dict[kind]:
-        total_cells = []
-        key_pb = key
-        key = datastore_types.Key._FromPb(key)
-        try:
-          row_spec = RowInterval(start_row = str(key),
-                    start_inclusive = True,
-                    end_row = str(key),
-                    end_inclusive = True)
-          scanner_id = client.open_scanner(table_name,
-                          ScanSpec(columns = ['meta', 'entity'],
-                              row_intervals = [row_spec],
-                              row_limit = 0,
-                              revs = 1),
-                          True);
-
-          while True:
-            cells = client.next_cells(scanner_id)
-            if len(cells) > 0:
-              total_cells += cells
-            else:
-              break
-        except ClientException:
-          logging.warning('No data for %s' %table_name)
-        client.close_scanner(scanner_id)
-
-        for cell in total_cells:
-          if cell.key.column_family == 'entity' and cell.key.column_qualifier == 'proto':
-            entity_proto = entity_pb.EntityProto(str(cell.value))
-            entity_proto.mutable_key().CopyFrom(key_pb)
-            group = get_response.add_entity()
-            group.mutable_entity().CopyFrom(entity_proto)
-    client.close()
-
-  def _Dynamic_RunQuery(self, query, query_result):
-    client = self._GetThriftClient()
-    kind = query.kind()
-    keys_only = query.keys_only()
-    filters = query.filter_list()
-    orders = query.order_list()
-    offset = query.offset()
-    limit = query.limit()
-    namespace = query.name_space()
-    #predicate = query.predicate()
-
-    table_name = str('%s_%s' % (self.__app_id, kind))
-
-    if filters or orders:
-      row_limit = 0
-    else:
-      row_limit = offset + limit
-
-    try:
-      scanner_id = client.open_scanner(table_name,
-                      ScanSpec(columns = ['meta', 'entity'],
-                          row_limit = row_limit,
-                          revs = 1,
-                          keys_only = keys_only),
-                      True);
-      total_cells = []
-
-      while True:
-        cells = client.next_cells(scanner_id)
-        if len(cells) > 0:
-          total_cells += cells
-        else:
-          break
-    except ClientException:
-      logging.warning('No data for %s' %table_name)
-      client.close()
-      return
-    finally:
-      try:
-        client.close_scanner(scanner_id)
-      except:
-        pass
-
-    # make a cell-key dictionary
-    key_cell_dict = {}
-    for cell in total_cells:
-      if key_cell_dict.has_key(cell.key.row):
-        key_cell_dict[cell.key.row].append(cell)
-      else:
-        key_cell_dict[cell.key.row] = [cell]
-
-    pb_entities = []
-    for key in key_cell_dict:
-      key_obj = datastore_types.Key(encoded=key)
-      key_pb = key_obj._ToPb()
-      for cell in key_cell_dict[key]:
-        if cell.key.column_family == 'entity' and cell.key.column_qualifier == 'proto':
-          entity_proto = entity_pb.EntityProto(str(cell.value))
-          entity_proto.mutable_key().CopyFrom(key_pb)
-          pb_entities.append(entity_proto)
-
-    results = map(lambda entity: datastore.Entity.FromPb(entity), pb_entities)
-
-    query.set_app(self.__app_id)
-    datastore_types.SetNamespace(query, namespace)
-    encoded = datastore_types.EncodeAppIdNamespace(self.__app_id, namespace)
-
-    operators = {datastore_pb.Query_Filter.LESS_THAN:      '<',
-           datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:  '<=',
-           datastore_pb.Query_Filter.GREATER_THAN:      '>',
-           datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL: '>=',
-           datastore_pb.Query_Filter.EQUAL:        '==',
-           }
-
-    def has_prop_indexed(entity, prop):
-      """Returns True if prop is in the entity and is indexed."""
-      if prop in datastore_types._SPECIAL_PROPERTIES:
-        return True
-      elif prop in entity.unindexed_properties():
-        return False
-
-      values = entity.get(prop, [])
-      if not isinstance(values, (tuple, list)):
-        values = [values]
-
-      for value in values:
-        if type(value) not in datastore_types._RAW_PROPERTY_TYPES:
-          return True
-      return False
-
-    for filt in filters:
-      assert filt.op() != datastore_pb.Query_Filter.IN
-
-      prop = filt.property(0).name().decode('utf-8')
-      op = operators[filt.op()]
-
-      filter_val_list = [datastore_types.FromPropertyPb(filter_prop)
-               for filter_prop in filt.property_list()]
-
-      def passes_filter(entity):
-        """Returns True if the entity passes the filter, False otherwise.
-
-        The filter being evaluated is filt, the current filter that we're on
-        in the list of filters in the query.
-        """
-        logging.debug('filter check for entity: %r' %entity)
-        if not has_prop_indexed(entity, prop):
-          return False
-
-        try:
-          entity_vals = datastore._GetPropertyValue(entity, prop)
-        except KeyError:
-          entity_vals = []
-
-        if not isinstance(entity_vals, list):
-          entity_vals = [entity_vals]
-
-        for fixed_entity_val in entity_vals:
-          for filter_val in filter_val_list:
-            fixed_entity_type = self._PROPERTY_TYPE_TAGS.get(
-                                    fixed_entity_val.__class__)
-            filter_type = self._PROPERTY_TYPE_TAGS.get(filter_val.__class__)
-            if fixed_entity_type == filter_type:
-              comp = u'%r %s %r' % (fixed_entity_val, op, filter_val)
-            elif op != '==':
-              comp = '%r %s %r' % (fixed_entity_type, op, filter_type)
-            else:
-              continue
-
-            logging.log(logging.DEBUG - 1,
-                'Evaling filter expression "%s"', comp)
-
-            try:
-              ret = eval(comp)
-              if ret and ret != NotImplementedError:
-                return True
-            except TypeError:
-              pass
-
-        return False
-
-      results = filter(passes_filter, results)
-    logging.debug('entity list after filter operation: %r' %results)
-
-    for order in orders:
-      prop = order.property().decode('utf-8')
-      results = [entity for entity in results if has_prop_indexed(entity, prop)]
-
-    def order_compare_entities(a, b):
-      """ Return a negative, zero or positive number depending on whether
-      entity a is considered smaller than, equal to, or larger than b,
-      according to the query's orderings. """
-      cmped = 0
-      for o in orders:
-        prop = o.property().decode('utf-8')
-
-        reverse = (o.direction() is datastore_pb.Query_Order.DESCENDING)
-
-        a_val = datastore._GetPropertyValue(a, prop)
-        if isinstance(a_val, list):
-          a_val = sorted(a_val, order_compare_properties, reverse=reverse)[0]
-
-        b_val = datastore._GetPropertyValue(b, prop)
-        if isinstance(b_val, list):
-          b_val = sorted(b_val, order_compare_properties, reverse=reverse)[0]
-
-        cmped = order_compare_properties(a_val, b_val)
-
-        if o.direction() is datastore_pb.Query_Order.DESCENDING:
-          cmped = -cmped
-
-        if cmped != 0:
-          return cmped
-
-      if cmped == 0:
-        return cmp(a.key(), b.key())
-
-    def order_compare_properties(x, y):
-      """Return a negative, zero or positive number depending on whether
-      property value x is considered smaller than, equal to, or larger than
-      property value y. If x and y are different types, they're compared based
-      on the type ordering used in the real datastore, which is based on the
-      tag numbers in the PropertyValue PB.
-      """
-      if isinstance(x, datetime.datetime):
-        x = datastore_types.DatetimeToTimestamp(x)
-      if isinstance(y, datetime.datetime):
-        y = datastore_types.DatetimeToTimestamp(y)
-
-      x_type = self._PROPERTY_TYPE_TAGS.get(x.__class__)
-      y_type = self._PROPERTY_TYPE_TAGS.get(y.__class__)
-
-      if x_type == y_type:
-        try:
-          return cmp(x, y)
-        except TypeError:
-          return 0
-      else:
-        return cmp(x_type, y_type)
-
-    results.sort(order_compare_entities)
-
-    cursor = _Cursor(query, results, order_compare_entities)
-    self.__queries[cursor.cursor] = cursor
-
-    if query.has_count():
-      count = query.count()
-    elif query.has_limit():
-      count = query.limit()
-    else:
-      count = _BATCH_SIZE
-
-    cursor.PopulateQueryResult(query_result, count,
-                   query.offset(), compile=query.compile())
-
-    if query.compile():
-      compiled_query = query_result.mutable_compiled_query()
-      compiled_query.set_keys_only(query.keys_only())
-      compiled_query.mutable_primaryscan().set_index_name(query.Encode())
-    client.close()
-
-  def _Dynamic_Next(self, next_request, query_result):
-    self.__ValidateAppId(next_request.cursor().app())
-
-    cursor_handle = next_request.cursor().cursor()
-
-    try:
-      cursor = self.__queries[cursor_handle]
-    except KeyError:
-      raise apiproxy_errors.ApplicationError(
-        datastore_pb.Error.BAD_REQUEST, 'Cursor %d not found' % cursor_handle)
-
-    assert cursor.app == next_request.cursor().app()
-
-    count = _BATCH_SIZE
-    if next_request.has_count():
-      count = next_request.count()
-    cursor.PopulateQueryResult(query_result,
-                   count, next_request.offset(),
-                   next_request.compile())
-
-  def _Dynamic_Count(self, query, integer64proto):
-    query_result = datastore_pb.QueryResult()
-    self._Dynamic_RunQuery(query, query_result)
-    cursor = query_result.cursor().cursor()
-    integer64proto.set_value(min(self.__queries[cursor].count, _MAXIMUM_RESULTS))
-    del self.__queries[cursor]
+	_PROPERTY_TYPE_TAGS = {
+		datastore_types.Blob: entity_pb.PropertyValue.kstringValue,
+		bool: entity_pb.PropertyValue.kbooleanValue,
+		datastore_types.Category: entity_pb.PropertyValue.kstringValue,
+		datetime.datetime: entity_pb.PropertyValue.kint64Value,
+		datastore_types.Email: entity_pb.PropertyValue.kstringValue,
+		float: entity_pb.PropertyValue.kdoubleValue,
+		datastore_types.GeoPt: entity_pb.PropertyValue.kPointValueGroup,
+		datastore_types.IM: entity_pb.PropertyValue.kstringValue,
+		int: entity_pb.PropertyValue.kint64Value,
+		datastore_types.Key: entity_pb.PropertyValue.kReferenceValueGroup,
+		datastore_types.Link: entity_pb.PropertyValue.kstringValue,
+		long: entity_pb.PropertyValue.kint64Value,
+		datastore_types.PhoneNumber: entity_pb.PropertyValue.kstringValue,
+		datastore_types.PostalAddress: entity_pb.PropertyValue.kstringValue,
+		datastore_types.Rating: entity_pb.PropertyValue.kint64Value,
+		str: entity_pb.PropertyValue.kstringValue,
+		datastore_types.Text: entity_pb.PropertyValue.kstringValue,
+		type(None): 0,
+		unicode: entity_pb.PropertyValue.kstringValue,
+		users.User: entity_pb.PropertyValue.kUserValueGroup,
+   	 }
+
+
+	def __init__(self, app_id,
+				thrift_address='127.0.0.1',
+				thrift_port='38080', 
+				service_name='datastore_v3', 
+				trusted=False):
+		"""
+		Initialize this stub with the service name.
+		"""
+		self.__app_id = app_id
+		self.__schema = '''
+<Schema>
+  <AccessGroup name="default">
+    <ColumnFamily>
+      <Name>meta</Name>
+      <deleted>false</deleted>
+    </ColumnFamily>
+    <ColumnFamily>
+      <Name>entity</Name>
+      <deleted>false</deleted>
+    </ColumnFamily>
+  </AccessGroup>
+</Schema>
+'''
+		self.__thrift_address = thrift_address
+		self.__thrift_port = thrift_port
+		self.__trusted = trusted
+		self.__queries = {}
+
+		super(HypertableStub, self).__init__(service_name)
+
+	def _GetThriftClient(self):
+		"""Get a new Thrift connection"""
+		return ThriftClient(self.__thrift_address, self.__thrift_port)
+
+	def _Create_Obj_Datastore(self, client, kind, namespace):
+		namespace = '%s/%s' %(self.__app_id, namespace)
+		if not client.exists_namespace(namespace):
+			ns = client.create_namespace(namespace)
+		ns = client.open_namespace(namespace)
+
+		if not client.exists_table(ns, kind):
+			client.create_table(ns, kind, self.__schema)
+		
+	def _AppIdNamespaceKindForKey(self, key):
+		""" Get (app, kind) tuple from given key.
+	
+		The (app, kind) tuple is used as an index into several internal
+		dictionaries, e.g. __entities.
+	
+		Args:
+			key: entity_pb.Reference
+	
+		Returns:
+			Tuple (app, kind), both are unicode strings.
+		"""
+		last_path = key.path().element_list()[-1]
+		return (datastore_types.EncodeAppIdNamespace(key.app(), key.name_space()),
+				last_path.type())
+
+	@staticmethod
+	def __EncodeIndexPB(pb):
+		if isinstance(pb, entity_pb.PropertyValue) and pb.has_uservalue():
+			userval = entity_pb.PropertyValue()
+			userval.mutable_uservalue().set_email(pb.uservalue().email())
+			userval.mutable_uservalue().set_auth_domain(pb.uservalue().auth_domain())
+			userval.mutable_uservalue().set_gaiaid(0)
+			pb = userval
+		encoder = sortable_pb_encoder.Encoder()
+		pb.Output(encoder)
+		return buffer(encoder.buffer().tostring())
+
+	@staticmethod
+	def __GetEntityKind(key):
+		if isinstance(key, entity_pb.EntityProto):
+			key = key.key()
+		return key.path().element_list()[-1].type()
+
+	def __ValidateAppId(self, app_id):
+		"""Verify that this is the stub for app_id.
+	
+		Args:
+			app_id: An application ID.
+	
+		Raises:
+			datastore_errors.BadRequestError: if this is not the stub for app_id.
+		"""
+		assert app_id
+		if not self.__trusted and app_id != self.__app_id:
+			raise datastore_errors.BadRequestError(
+					'app %s cannot access app %s\'s data' % (self.__app_id, app_id))
+
+	def __ValidateKey(self, key):
+		"""Validate this key.
+
+		Args:
+			key: entity_pb.Reference
+
+		Raises:
+			datastore_errors.BadRequestError: if the key is invalid
+		"""
+		assert isinstance(key, entity_pb.Reference)
+
+		self.__ValidateAppId(key.app())
+
+		for elem in key.path().element_list():
+			if elem.has_id() == elem.has_name():
+				raise datastore_errors.BadRequestError(
+					'each key path element should have id or name but not both: %r'
+					% key)
+
+	def __GenerateNewKey(self, kind):
+		return datastore_types.Key.from_path( kind, str(uuid.uuid4()).replace('-', ''), _app=self.__app_id )
+
+	def _Dynamic_Put(self, put_request, put_response):
+		client = self._GetThriftClient()
+		entities = put_request.entity_list()
+		kind_cells_dict = {}
+
+		for entity in entities:
+			self.__ValidateKey(entity.key())
+			
+			for prop in itertools.chain(entity.property_list(),
+									entity.raw_property_list()):
+				datastore_stub_util.FillUser(prop)
+
+			assert entity.has_key()
+			assert entity.key().path().element_size() > 0
+			
+			last_path = entity.key().path().element_list()[-1]
+			if last_path.id() == 0 and not last_path.has_name():
+				#id_ = self.__AllocateIds(conn, self._GetTablePrefix(entity.key()), 1)
+				#last_path.set_id(id_)
+				
+				assert entity.entity_group().element_size() == 0
+				group = entity.mutable_entity_group()
+				root = entity.key().path().element(0)
+				group.add_element().CopyFrom(root)
+			else:
+				assert (entity.has_entity_group() and
+					entity.entity_group().element_size() > 0)
+			
+			kind = self.__GetEntityKind(entity)
+			namespace = entity.key().name_space()
+			# create table for this kind if not created already.
+			self._Create_Obj_Datastore(client, kind, namespace)
+			
+			index = (kind, namespace)
+			if kind_cells_dict.has_key(index):
+				kind_cells_dict[index].append(entity)
+			else:
+				kind_cells_dict[index] = [entity]
+
+		put_keys = []
+		for kind, namespace in kind_cells_dict.keys():
+			ns = client.open_namespace('%s/%s' %(self.__app_id, namespace))
+			mutator = client.open_mutator(ns, kind, 0, 0)
+
+			entities = kind_cells_dict[(kind, namespace)]
+			for entity in entities:
+				try:
+					logging.debug('using provided key')
+					key = datastore_types.Key._FromPb(entity.key())
+					# encode the key
+					encoded_key = str(key)
+				except datastore_errors.BadKeyError:
+					logging.debug('generating a new key')
+					# generate the key for this entity
+					key = self.__GenerateNewKey(kind)
+					# encode the key
+					encoded_key = str(key)
+				logging.debug('encoded key: %r' %encoded_key)
+				entity_cell = Cell(
+									Key(
+										row = encoded_key,
+										column_family = 'entity', 
+										column_qualifier = 'proto', 
+										flag = 255),
+									str(buffer(entity.Encode())))
+				client.set_cell(mutator, entity_cell)
+				put_keys.append(key._ToPb())
+			client.close_mutator(mutator, True);
+		client.close()
+		put_response.key_list().extend(put_keys)
+
+	
+	def _Dynamic_Delete(self, delete_request, delete_response):
+		client = self._GetThriftClient()
+		keys = [datastore_types.Key._FromPb(key) for key in delete_request.key_list()]
+		kind_keys_dict = {}
+		for key in keys:
+			index = (key.kind(), key.namespace())
+			if kind_keys_dict.has_key(index):
+				kind_keys_dict[index].append(key)
+			else:
+				kind_keys_dict[index] = [key]
+
+		for kind, namespace in kind_keys_dict:
+			ns = client.open_namespace('%s/%s' %(self.__app_id, namespace))
+			mutator = client.open_mutator(ns, kind, 0, 0)
+			this_kind_keys = [str(key) for key in kind_keys_dict[(kind, namespace)]]
+			for this_key in this_kind_keys:
+				logging.debug('deleting cells with key: %s' %this_key)
+				this_key_cells = Cell(
+									Key(
+										row = this_key,
+										flag = 0),
+									)
+				client.set_cells(mutator, [this_key_cells])
+			client.close_mutator(mutator, True);
+		client.close()
+
+	def _Dynamic_Drop(self, drop_request, drop_response):
+		client = self._GetThriftClient()
+		kind = drop_request.kind
+		namespace = namespace_manager.get_namespace()
+		ns = client.open_namespace('%s/%s' %(self.__app_id, namespace))
+		client.drop_table(ns, kind, True)
+		client.close()
+	
+	def _Dynamic_Get(self, get_request, get_response):
+		client = self._GetThriftClient()
+		keys = get_request.key_list()
+		kind_keys_dict = {}
+		
+		for key in keys:
+			appid_namespace, kind = self._AppIdNamespaceKindForKey(key)
+			namespace = appid_namespace.rsplit('!', 1)[1] if '!' in appid_namespace else ''
+			index = (kind, namespace)
+			if kind_keys_dict.has_key(index):
+				kind_keys_dict[index].append(key)
+			else:
+				kind_keys_dict[index] = [key]
+
+		for kind, namespace in kind_keys_dict:
+			ns = client.open_namespace('%s/%s' %(self.__app_id, namespace))
+			for key in kind_keys_dict[(kind, namespace)]:
+				total_cells = []
+				key_pb = key
+				key = datastore_types.Key._FromPb(key)
+				try:
+					row_spec = RowInterval(start_row = str(key),
+										start_inclusive = True,
+										end_row = str(key),
+										end_inclusive = True)
+					scanner_id = client.open_scanner(ns, kind,
+													ScanSpec(columns = ['entity'],
+															row_intervals = [row_spec],
+															row_limit = 0,
+															revs = 1),
+													True);
+
+					while True:
+						cells = client.next_cells(scanner_id)
+						if len(cells) > 0:
+							total_cells += cells
+						else:
+							break
+				except ClientException:
+					logging.warning('No data for %s' %kind)
+				client.close_scanner(scanner_id)
+
+				for cell in total_cells:
+					if cell.key.column_family == 'entity' and cell.key.column_qualifier == 'proto':
+						entity_proto = entity_pb.EntityProto(str(cell.value))
+						entity_proto.mutable_key().CopyFrom(key_pb)
+						group = get_response.add_entity()
+						group.mutable_entity().CopyFrom(entity_proto)
+		client.close()
+
+	def _Dynamic_RunQuery(self, query, query_result):
+		client = self._GetThriftClient()
+		kind = query.kind()
+		keys_only = query.keys_only()
+		filters = query.filter_list()
+		orders = query.order_list()
+		offset = query.offset()
+		limit = query.limit()
+		namespace = query.name_space()
+		#predicate = query.predicate()
+		
+		if filters or orders:
+			row_limit = 0
+		else:
+			row_limit = offset + limit
+		
+		ns = client.open_namespace('%s/%s' %(self.__app_id, namespace))
+		try:
+			scanner_id = client.open_scanner(ns, kind,
+											ScanSpec(columns = ['entity'],
+													row_limit = row_limit,
+													revs = 1,
+													keys_only = keys_only),
+											True);
+			total_cells = []
+
+			while True:
+				cells = client.next_cells(scanner_id)
+				if len(cells) > 0:
+					total_cells += cells
+				else:
+					break
+		except ClientException:
+			logging.warning('No data for %s' %kind)
+			client.close()
+			return
+		finally:
+			client.close_scanner(scanner_id)
+		
+		# make a cell-key dictionary
+		key_cell_dict = {}
+		for cell in total_cells:
+			if key_cell_dict.has_key(cell.key.row):
+				key_cell_dict[cell.key.row].append(cell)
+			else:
+				key_cell_dict[cell.key.row] = [cell]
+				
+		pb_entities = []
+		for key in key_cell_dict:
+			key_obj = datastore_types.Key(encoded=key)
+			key_pb = key_obj._ToPb()
+			for cell in key_cell_dict[key]:
+				if cell.key.column_family == 'entity' and cell.key.column_qualifier == 'proto':
+					entity_proto = entity_pb.EntityProto(str(cell.value))
+					entity_proto.mutable_key().CopyFrom(key_pb)
+					pb_entities.append(entity_proto)
+		
+		results = map(lambda entity: datastore.Entity.FromPb(entity), pb_entities)
+	
+		query.set_app(self.__app_id)
+		datastore_types.SetNamespace(query, namespace)
+		encoded = datastore_types.EncodeAppIdNamespace(self.__app_id, namespace)
+	
+		operators = {datastore_pb.Query_Filter.LESS_THAN:			 '<',
+					 datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:	'<=',
+					 datastore_pb.Query_Filter.GREATER_THAN:			'>',
+					 datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL: '>=',
+					 datastore_pb.Query_Filter.EQUAL:				 '==',
+					 }
+	
+		def has_prop_indexed(entity, prop):
+			"""Returns True if prop is in the entity and is indexed."""
+			if prop in datastore_types._SPECIAL_PROPERTIES:
+				return True
+			elif prop in entity.unindexed_properties():
+				return False
+	
+			values = entity.get(prop, [])
+			if not isinstance(values, (tuple, list)):
+				values = [values]
+	
+			for value in values:
+				if type(value) not in datastore_types._RAW_PROPERTY_TYPES:
+					return True
+			return False
+	
+		for filt in filters:
+			assert filt.op() != datastore_pb.Query_Filter.IN
+	
+			prop = filt.property(0).name().decode('utf-8')
+			op = operators[filt.op()]
+	
+			filter_val_list = [datastore_types.FromPropertyPb(filter_prop)
+							 for filter_prop in filt.property_list()]
+	
+			def passes_filter(entity):
+				"""Returns True if the entity passes the filter, False otherwise.
+		
+				The filter being evaluated is filt, the current filter that we're on
+				in the list of filters in the query.
+				"""
+				if not has_prop_indexed(entity, prop):
+					return False
+		
+				try:
+					entity_vals = datastore._GetPropertyValue(entity, prop)
+				except KeyError:
+					entity_vals = []
+		
+				if not isinstance(entity_vals, list):
+					entity_vals = [entity_vals]
+		
+				for fixed_entity_val in entity_vals:
+					for filter_val in filter_val_list:
+						fixed_entity_type = self._PROPERTY_TYPE_TAGS.get(
+																		fixed_entity_val.__class__)
+						filter_type = self._PROPERTY_TYPE_TAGS.get(filter_val.__class__)
+						if fixed_entity_type == filter_type:
+							comp = u'%r %s %r' % (fixed_entity_val, op, filter_val)
+						elif op != '==':
+							comp = '%r %s %r' % (fixed_entity_type, op, filter_type)
+						else:
+							continue
+		
+						logging.log(logging.DEBUG - 1,
+								'Evaling filter expression "%s"', comp)
+		
+						try:
+							ret = eval(comp)
+							if ret and ret != NotImplementedError:
+								return True
+						except TypeError:
+							pass
+		
+				return False
+	
+			results = filter(passes_filter, results)
+	
+		for order in orders:
+			prop = order.property().decode('utf-8')
+			results = [entity for entity in results if has_prop_indexed(entity, prop)]
+	
+		def order_compare_entities(a, b):
+			""" Return a negative, zero or positive number depending on whether
+			entity a is considered smaller than, equal to, or larger than b,
+			according to the query's orderings. """
+			cmped = 0
+			for o in orders:
+				prop = o.property().decode('utf-8')
+		
+				reverse = (o.direction() is datastore_pb.Query_Order.DESCENDING)
+		
+				a_val = datastore._GetPropertyValue(a, prop)
+				if isinstance(a_val, list):
+					a_val = sorted(a_val, order_compare_properties, reverse=reverse)[0]
+		
+				b_val = datastore._GetPropertyValue(b, prop)
+				if isinstance(b_val, list):
+					b_val = sorted(b_val, order_compare_properties, reverse=reverse)[0]
+		
+				cmped = order_compare_properties(a_val, b_val)
+		
+				if o.direction() is datastore_pb.Query_Order.DESCENDING:
+					cmped = -cmped
+	
+				if cmped != 0:
+					return cmped
+	
+			if cmped == 0:
+				return cmp(a.key(), b.key())
+	
+		def order_compare_properties(x, y):
+			"""Return a negative, zero or positive number depending on whether
+			property value x is considered smaller than, equal to, or larger than
+			property value y. If x and y are different types, they're compared based
+			on the type ordering used in the real datastore, which is based on the
+			tag numbers in the PropertyValue PB.
+			"""
+			if isinstance(x, datetime.datetime):
+				x = datastore_types.DatetimeToTimestamp(x)
+			if isinstance(y, datetime.datetime):
+				y = datastore_types.DatetimeToTimestamp(y)
+	
+			x_type = self._PROPERTY_TYPE_TAGS.get(x.__class__)
+			y_type = self._PROPERTY_TYPE_TAGS.get(y.__class__)
+	
+			if x_type == y_type:
+				try:
+					return cmp(x, y)
+				except TypeError:
+					return 0
+			else:
+				return cmp(x_type, y_type)
+	
+		results.sort(order_compare_entities)
+
+		cursor = _Cursor(query, results, order_compare_entities)
+		self.__queries[cursor.cursor] = cursor
+	
+		if query.has_count():
+			count = query.count()
+		elif query.has_limit():
+			count = query.limit()
+		else:
+			count = _BATCH_SIZE
+	
+		cursor.PopulateQueryResult(query_result, count,
+									 query.offset(), compile=query.compile())
+	
+		if query.compile():
+			compiled_query = query_result.mutable_compiled_query()
+			compiled_query.set_keys_only(query.keys_only())
+			compiled_query.mutable_primaryscan().set_index_name(query.Encode())
+		client.close()
+	
+	def _Dynamic_Next(self, next_request, query_result):
+		self.__ValidateAppId(next_request.cursor().app())
+	
+		cursor_handle = next_request.cursor().cursor()
+	
+		try:
+			cursor = self.__queries[cursor_handle]
+		except KeyError:
+			raise apiproxy_errors.ApplicationError(
+				datastore_pb.Error.BAD_REQUEST, 'Cursor %d not found' % cursor_handle)
+	
+		assert cursor.app == next_request.cursor().app()
+	
+		count = _BATCH_SIZE
+		if next_request.has_count():
+			count = next_request.count()
+		cursor.PopulateQueryResult(query_result,
+									 count, next_request.offset(),
+									 next_request.compile())
+	
+	def _Dynamic_Count(self, query, integer64proto):
+		query_result = datastore_pb.QueryResult()
+		self._Dynamic_RunQuery(query, query_result)
+		cursor = query_result.cursor().cursor()
+		integer64proto.set_value(min(self.__queries[cursor].count, _MAXIMUM_RESULTS))
+		del self.__queries[cursor]
