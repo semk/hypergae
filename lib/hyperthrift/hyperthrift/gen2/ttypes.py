@@ -4,36 +4,37 @@
 # DO NOT EDIT UNLESS YOU ARE SURE THAT YOU KNOW WHAT YOU ARE DOING
 #
 
-from thrift.Thrift import *
-import hyperthrift.gen.ttypes
+from cyclozzo.thrift.Thrift import *
+import cyclozzo.hyperthrift.gen.ttypes
 
 
-from thrift.transport import TTransport
-from thrift.protocol import TBinaryProtocol
+from cyclozzo.thrift.transport import TTransport
+from cyclozzo.thrift.protocol import TBinaryProtocol, TProtocol
 try:
-  from thrift.protocol import fastbinary
+  from cyclozzo.thrift.protocol import fastbinary
 except:
   fastbinary = None
+
 
 
 class HqlResult:
   """
   Result type of HQL queries
-  
+
   <dl>
     <dt>results</dt>
     <dd>String results from metadata queries</dd>
-  
+
     <dt>cells</dt>
     <dd>Resulting table cells of for buffered queries</dd>
-  
+
     <dt>scanner</dt>
     <dd>Resulting scanner ID for unbuffered queries</dd>
-  
+
     <dt>mutator</dt>
     <dd>Resulting mutator ID for unflushed modifying queries</dd>
   </dl>
-  
+
   Attributes:
    - results
    - cells
@@ -44,7 +45,7 @@ class HqlResult:
   thrift_spec = (
     None, # 0
     (1, TType.LIST, 'results', (TType.STRING,None), None, ), # 1
-    (2, TType.LIST, 'cells', (TType.STRUCT,(hyperthrift.gen.ttypes.Cell, hyperthrift.gen.ttypes.Cell.thrift_spec)), None, ), # 2
+    (2, TType.LIST, 'cells', (TType.STRUCT,(cyclozzo.hyperthrift.gen.ttypes.Cell, cyclozzo.hyperthrift.gen.ttypes.Cell.thrift_spec)), None, ), # 2
     (3, TType.I64, 'scanner', None, None, ), # 3
     (4, TType.I64, 'mutator', None, None, ), # 4
   )
@@ -79,7 +80,7 @@ class HqlResult:
           self.cells = []
           (_etype9, _size6) = iprot.readListBegin()
           for _i10 in xrange(_size6):
-            _elem11 = hyperthrift.gen.ttypes.Cell()
+            _elem11 = cyclozzo.hyperthrift.gen.ttypes.Cell()
             _elem11.read(iprot)
             self.cells.append(_elem11)
           iprot.readListEnd()
@@ -129,6 +130,9 @@ class HqlResult:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -144,7 +148,7 @@ class HqlResult:
 class HqlResult2:
   """
   Same as HqlResult except with cell as array
-  
+
   Attributes:
    - results
    - cells
@@ -247,6 +251,9 @@ class HqlResult2:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -258,4 +265,3 @@ class HqlResult2:
 
   def __ne__(self, other):
     return not (self == other)
-

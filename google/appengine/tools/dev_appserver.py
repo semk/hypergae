@@ -3592,21 +3592,10 @@ def SetupStubs(app_id, **config):
 
   if use_hypertable:
     # use thrift provider by default incase of hypertable storage
-    default_schema = os.path.join(
-                        os.path.dirname(
-                            os.path.dirname(
-                                os.path.dirname(
-                                    os.path.dirname(os.path.abspath(__file__))
-                                    )
-                                )
-                            ),
-                        'conf/default.schema.xml')
-    schema = config.get('default_schema', default_schema)
     thrift_address = config.get('thrift_address', '127.0.0.1')
     thrift_port = int(config.get('thrift_port', 38080))
     datastore = datastore_hypertable_thrift.HypertableStub(
-        app_id, schema=schema, thrift_address=thrift_address,
-        thrift_port=thrift_port)
+        app_id, thrift_address=thrift_address, thrift_port=thrift_port)
   elif use_sqlite:
     datastore = datastore_sqlite_stub.DatastoreSqliteStub(
         app_id, datastore_path, require_indexes=require_indexes,

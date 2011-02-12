@@ -4,6 +4,6 @@
 # DO NOT EDIT UNLESS YOU ARE SURE THAT YOU KNOW WHAT YOU ARE DOING
 #
 
-from thrift.Thrift import *
+from cyclozzo.thrift.Thrift import *
 from ttypes import *
 

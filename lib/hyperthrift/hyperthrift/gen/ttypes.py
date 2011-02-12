@@ -4,30 +4,30 @@
 # DO NOT EDIT UNLESS YOU ARE SURE THAT YOU KNOW WHAT YOU ARE DOING
 #
 
-from thrift.Thrift import *
+from cyclozzo.thrift.Thrift import *
 
-from thrift.transport import TTransport
-from thrift.protocol import TBinaryProtocol
+from cyclozzo.thrift.transport import TTransport
+from cyclozzo.thrift.protocol import TBinaryProtocol, TProtocol
 try:
-  from thrift.protocol import fastbinary
+  from cyclozzo.thrift.protocol import fastbinary
 except:
   fastbinary = None
 
 
-class CellFlag:
+class KeyFlag:
   """
-  State flags for a table cell
-  
+  State flags for a key
+
   Note for maintainers: the definition must be sync'ed with FLAG_* constants
   in src/cc/Hypertable/Lib/Key.h
-  
+
   DELETE_ROW: row is pending delete
-  
+
   DELETE_CF: column family is pending delete
-  
-  DELETE_CELL: cell is pending delete
-  
-  INSERT: cell is an insert/update (default state)
+
+  DELETE_CELL: key is pending delete
+
+  INSERT: key is an insert/update (default state)
   """
   DELETE_ROW = 0
   DELETE_CF = 1
@@ -51,7 +51,7 @@ class CellFlag:
 class MutatorFlag:
   """
   Mutator creation flags
-  
+
   NO_LOG_SYNC: Do not sync the commit log
   IGNORE_UNKNOWN_CFS: Don't throw exception if mutator writes to unknown column family
   """
@@ -68,24 +68,25 @@ class MutatorFlag:
     "IGNORE_UNKNOWN_CFS": 2,
   }
 
+
 class RowInterval:
   """
   Specifies a range of rows
-  
+
   <dl>
     <dt>start_row</dt>
     <dd>The row to start scan with. Must not contain nulls (0x00)</dd>
-  
+
     <dt>start_inclusive</dt>
     <dd>Whether the start row is included in the result (default: true)</dd>
-  
+
     <dt>end_row</dt>
     <dd>The row to end scan with. Must not contain nulls</dd>
-  
+
     <dt>end_inclusive</dt>
     <dd>Whether the end row is included in the result (default: true)</dd>
   </dl>
-  
+
   Attributes:
    - start_row
    - start_inclusive
@@ -95,10 +96,10 @@ class RowInterval:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'start_row', None, None, ), # 1
-    (2, TType.BOOL, 'start_inclusive', None, True, ), # 2
-    (3, TType.STRING, 'end_row', None, None, ), # 3
-    (4, TType.BOOL, 'end_inclusive', None, True, ), # 4
+    (1, TType.STRING, 'start_row', None, None,), # 1
+    (2, TType.BOOL, 'start_inclusive', None, True,), # 2
+    (3, TType.STRING, 'end_row', None, None,), # 3
+    (4, TType.BOOL, 'end_inclusive', None, True,), # 4
   )
 
   def __init__(self, start_row=None, start_inclusive=thrift_spec[2][4], end_row=None, end_inclusive=thrift_spec[4][4],):
@@ -164,6 +165,9 @@ class RowInterval:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -179,29 +183,29 @@ class RowInterval:
 class CellInterval:
   """
   Specifies a range of cells
-  
+
   <dl>
     <dt>start_row</dt>
     <dd>The row to start scan with. Must not contain nulls (0x00)</dd>
-  
+
     <dt>start_column</dt>
     <dd>The column (prefix of column_family:column_qualifier) of the
     start row for the scan</dd>
-  
+
     <dt>start_inclusive</dt>
     <dd>Whether the start row is included in the result (default: true)</dd>
-  
+
     <dt>end_row</dt>
     <dd>The row to end scan with. Must not contain nulls</dd>
-  
+
     <dt>end_column</dt>
     <dd>The column (prefix of column_family:column_qualifier) of the
     end row for the scan</dd>
-  
+
     <dt>end_inclusive</dt>
     <dd>Whether the end row is included in the result (default: true)</dd>
   </dl>
-  
+
   Attributes:
    - start_row
    - start_column
@@ -213,12 +217,12 @@ class CellInterval:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'start_row', None, None, ), # 1
-    (2, TType.STRING, 'start_column', None, None, ), # 2
-    (3, TType.BOOL, 'start_inclusive', None, True, ), # 3
-    (4, TType.STRING, 'end_row', None, None, ), # 4
-    (5, TType.STRING, 'end_column', None, None, ), # 5
-    (6, TType.BOOL, 'end_inclusive', None, True, ), # 6
+    (1, TType.STRING, 'start_row', None, None,), # 1
+    (2, TType.STRING, 'start_column', None, None,), # 2
+    (3, TType.BOOL, 'start_inclusive', None, True,), # 3
+    (4, TType.STRING, 'end_row', None, None,), # 4
+    (5, TType.STRING, 'end_column', None, None,), # 5
+    (6, TType.BOOL, 'end_inclusive', None, True,), # 6
   )
 
   def __init__(self, start_row=None, start_column=None, start_inclusive=thrift_spec[3][4], end_row=None, end_column=None, end_inclusive=thrift_spec[6][4],):
@@ -304,6 +308,9 @@ class CellInterval:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -319,36 +326,45 @@ class CellInterval:
 class ScanSpec:
   """
   Specifies options for a scan
-  
+
   <dl>
     <dt>row_intervals</dt>
     <dd>A list of ranges of rows to scan. Mutually exclusive with
     cell_interval</dd>
-  
+
     <dt>cell_intervals</dt>
     <dd>A list of ranges of cells to scan. Mutually exclusive with
     row_intervals</dd>
-  
+
     <dt>return_deletes</dt>
     <dd>Indicates whether cells pending delete are returned</dd>
-  
+
     <dt>revs</dt>
     <dd>Specifies max number of revisions of cells to return</dd>
-  
+
     <dt>row_limit</dt>
     <dd>Specifies max number of rows to return</dd>
-  
+
     <dt>start_time</dt>
     <dd>Specifies start time in nanoseconds since epoch for cells to
     return</dd>
-  
+
     <dt>end_time</dt>
     <dd>Specifies end time in nanoseconds since epoch for cells to return</dd>
-  
+
     <dt>columns</dt>
     <dd>Specifies the names of the columns to return</dd>
+
+    <dt>cell_limit</dt>
+    <dd>Specifies max number of cells to return per column family per row</dd>
+
+    <dt>row_regexp</dt>
+    <dd>Specifies a regexp used to filter by rowkey</dd>
+
+    <dt>value_regexp</dt>
+    <dd>Specifies a regexp used to filter by cell value</dd>
   </dl>
-  
+
   Attributes:
    - row_intervals
    - cell_intervals
@@ -359,22 +375,28 @@ class ScanSpec:
    - end_time
    - columns
    - keys_only
+   - cell_limit
+   - row_regexp
+   - value_regexp
   """
 
   thrift_spec = (
     None, # 0
-    (1, TType.LIST, 'row_intervals', (TType.STRUCT,(RowInterval, RowInterval.thrift_spec)), None, ), # 1
-    (2, TType.LIST, 'cell_intervals', (TType.STRUCT,(CellInterval, CellInterval.thrift_spec)), None, ), # 2
-    (3, TType.BOOL, 'return_deletes', None, False, ), # 3
-    (4, TType.I32, 'revs', None, 0, ), # 4
-    (5, TType.I32, 'row_limit', None, 0, ), # 5
-    (6, TType.I64, 'start_time', None, None, ), # 6
-    (7, TType.I64, 'end_time', None, None, ), # 7
-    (8, TType.LIST, 'columns', (TType.STRING,None), None, ), # 8
-    (9, TType.BOOL, 'keys_only', None, False, ), # 9
+    (1, TType.LIST, 'row_intervals', (TType.STRUCT, (RowInterval, RowInterval.thrift_spec)), None,), # 1
+    (2, TType.LIST, 'cell_intervals', (TType.STRUCT, (CellInterval, CellInterval.thrift_spec)), None,), # 2
+    (3, TType.BOOL, 'return_deletes', None, False,), # 3
+    (4, TType.I32, 'revs', None, 0,), # 4
+    (5, TType.I32, 'row_limit', None, 0,), # 5
+    (6, TType.I64, 'start_time', None, None,), # 6
+    (7, TType.I64, 'end_time', None, None,), # 7
+    (8, TType.LIST, 'columns', (TType.STRING, None), None,), # 8
+    (9, TType.BOOL, 'keys_only', None, False,), # 9
+    (10, TType.I32, 'cell_limit', None, 0,), # 10
+    (11, TType.STRING, 'row_regexp', None, None,), # 11
+    (12, TType.STRING, 'value_regexp', None, None,), # 12
   )
 
-  def __init__(self, row_intervals=None, cell_intervals=None, return_deletes=thrift_spec[3][4], revs=thrift_spec[4][4], row_limit=thrift_spec[5][4], start_time=None, end_time=None, columns=None, keys_only=thrift_spec[9][4],):
+  def __init__(self, row_intervals=None, cell_intervals=None, return_deletes=thrift_spec[3][4], revs=thrift_spec[4][4], row_limit=thrift_spec[5][4], start_time=None, end_time=None, columns=None, keys_only=thrift_spec[9][4], cell_limit=thrift_spec[10][4], row_regexp=None, value_regexp=None,):
     self.row_intervals = row_intervals
     self.cell_intervals = cell_intervals
     self.return_deletes = return_deletes
@@ -384,6 +406,9 @@ class ScanSpec:
     self.end_time = end_time
     self.columns = columns
     self.keys_only = keys_only
+    self.cell_limit = cell_limit
+    self.row_regexp = row_regexp
+    self.value_regexp = value_regexp
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -456,6 +481,21 @@ class ScanSpec:
           self.keys_only = iprot.readBool();
         else:
           iprot.skip(ftype)
+      elif fid == 10:
+        if ftype == TType.I32:
+          self.cell_limit = iprot.readI32();
+        else:
+          iprot.skip(ftype)
+      elif fid == 11:
+        if ftype == TType.STRING:
+          self.row_regexp = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      elif fid == 12:
+        if ftype == TType.STRING:
+          self.value_regexp = iprot.readString();
+        else:
+          iprot.skip(ftype)
       else:
         iprot.skip(ftype)
       iprot.readFieldEnd()
@@ -511,8 +551,23 @@ class ScanSpec:
       oprot.writeFieldBegin('keys_only', TType.BOOL, 9)
       oprot.writeBool(self.keys_only)
       oprot.writeFieldEnd()
+    if self.cell_limit != None:
+      oprot.writeFieldBegin('cell_limit', TType.I32, 10)
+      oprot.writeI32(self.cell_limit)
+      oprot.writeFieldEnd()
+    if self.row_regexp != None:
+      oprot.writeFieldBegin('row_regexp', TType.STRING, 11)
+      oprot.writeString(self.row_regexp)
+      oprot.writeFieldEnd()
+    if self.value_regexp != None:
+      oprot.writeFieldBegin('value_regexp', TType.STRING, 12)
+      oprot.writeString(self.value_regexp)
+      oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -528,29 +583,29 @@ class ScanSpec:
 class Key:
   """
   Defines a cell key
-  
+
   <dl>
     <dt>row</dt>
     <dd>Specifies the row key. Note, it cannot contain null characters.
     If a row key is not specified in a return cell, it's assumed to
     be the same as the previous cell</dd>
-  
+
     <dt>column_family</dt>
     <dd>Specifies the column family</dd>
-  
+
     <dt>column_qualifier</dt>
     <dd>Specifies the column qualifier. A column family must be specified.</dd>
-  
+
     <dt>timestamp</dt>
     <dd>Nanoseconds since epoch for the cell<dd>
-  
+
     <dt>revision</dt>
     <dd>A 64-bit revision number for the cell</dd>
-  
+
     <dt>flag</dt>
     <dd>A 16-bit integer indicating the state of the cell</dd>
   </dl>
-  
+
   Attributes:
    - row
    - column_family
@@ -562,12 +617,12 @@ class Key:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'row', None, None, ), # 1
-    (2, TType.STRING, 'column_family', None, None, ), # 2
-    (3, TType.STRING, 'column_qualifier', None, None, ), # 3
-    (4, TType.I64, 'timestamp', None, None, ), # 4
-    (5, TType.I64, 'revision', None, None, ), # 5
-    (6, TType.I16, 'flag', None, 255, ), # 6
+    (1, TType.STRING, 'row', None, None,), # 1
+    (2, TType.STRING, 'column_family', None, None,), # 2
+    (3, TType.STRING, 'column_qualifier', None, None,), # 3
+    (4, TType.I64, 'timestamp', None, None,), # 4
+    (5, TType.I64, 'revision', None, None,), # 5
+    (6, TType.I32, 'flag', None, 255,), # 6
   )
 
   def __init__(self, row=None, column_family=None, column_qualifier=None, timestamp=None, revision=None, flag=thrift_spec[6][4],):
@@ -613,8 +668,8 @@ class Key:
         else:
           iprot.skip(ftype)
       elif fid == 6:
-        if ftype == TType.I16:
-          self.flag = iprot.readI16();
+        if ftype == TType.I32:
+          self.flag = iprot.readI32();
         else:
           iprot.skip(ftype)
       else:
@@ -648,11 +703,14 @@ class Key:
       oprot.writeI64(self.revision)
       oprot.writeFieldEnd()
     if self.flag != None:
-      oprot.writeFieldBegin('flag', TType.I16, 6)
-      oprot.writeI16(self.flag)
+      oprot.writeFieldBegin('flag', TType.I32, 6)
+      oprot.writeI32(self.flag)
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -668,18 +726,18 @@ class Key:
 class MutateSpec:
   """
   Specifies options for a shared periodic mutator
-  
+
   <dl>
     <dt>appname</dt>
     <dd>String key used to share/retrieve mutator, eg: "my_ht_app"</dd>
-  
+
     <dt>flush_interval</dt>
     <dd>Time interval between flushes</dd>
-  
+
     <dt>flags</dt>
     <dd>Mutator flags</dt>
   </dl>
-  
+
   Attributes:
    - appname
    - flush_interval
@@ -688,9 +746,9 @@ class MutateSpec:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'appname', None, "", ), # 1
-    (2, TType.I32, 'flush_interval', None, 1000, ), # 2
-    (3, TType.I32, 'flags', None, 2, ), # 3
+    (1, TType.STRING, 'appname', None, "",), # 1
+    (2, TType.I32, 'flush_interval', None, 1000,), # 2
+    (3, TType.I32, 'flags', None, 2,), # 3
   )
 
   def __init__(self, appname=thrift_spec[1][4], flush_interval=thrift_spec[2][4], flags=thrift_spec[3][4],):
@@ -746,6 +804,15 @@ class MutateSpec:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      if self.appname is None:
+        raise TProtocol.TProtocolException(message='Required field appname is unset!')
+      if self.flush_interval is None:
+        raise TProtocol.TProtocolException(message='Required field flush_interval is unset!')
+      if self.flags is None:
+        raise TProtocol.TProtocolException(message='Required field flags is unset!')
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -761,15 +828,15 @@ class MutateSpec:
 class Cell:
   """
   Defines a table cell
-  
+
   <dl>
     <dt>key</dt>
     <dd>Specifies the cell key</dd>
-  
+
     <dt>value</dt>
     <dd>Value of a cell. Currently a sequence of uninterpreted bytes.</dd>
   </dl>
-  
+
   Attributes:
    - key
    - value
@@ -777,8 +844,8 @@ class Cell:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRUCT, 'key', (Key, Key.thrift_spec), None, ), # 1
-    (2, TType.STRING, 'value', None, None, ), # 2
+    (1, TType.STRUCT, 'key', (Key, Key.thrift_spec), None,), # 1
+    (2, TType.STRING, 'value', None, None,), # 2
   )
 
   def __init__(self, key=None, value=None,):
@@ -825,6 +892,94 @@ class Cell:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
+class NamespaceListing:
+  """
+  Defines an individual namespace listing
+
+  <dl>
+    <dt>name</dt>
+    <dd>Name of the listing.</dd>
+
+    <dt>is_namespace</dt>
+    <dd>true if this entry is a namespace.</dd>
+  </dl>
+
+  Attributes:
+   - name
+   - is_namespace
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.STRING, 'name', None, None,), # 1
+    (2, TType.BOOL, 'is_namespace', None, None,), # 2
+  )
+
+  def __init__(self, name=None, is_namespace=None,):
+    self.name = name
+    self.is_namespace = is_namespace
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.STRING:
+          self.name = iprot.readString();
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.BOOL:
+          self.is_namespace = iprot.readBool();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('NamespaceListing')
+    if self.name != None:
+      oprot.writeFieldBegin('name', TType.STRING, 1)
+      oprot.writeString(self.name)
+      oprot.writeFieldEnd()
+    if self.is_namespace != None:
+      oprot.writeFieldBegin('is_namespace', TType.BOOL, 2)
+      oprot.writeBool(self.is_namespace)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+    def validate(self):
+      if self.name is None:
+        raise TProtocol.TProtocolException(message='Required field name is unset!')
+      if self.is_namespace is None:
+        raise TProtocol.TProtocolException(message='Required field is_namespace is unset!')
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -840,21 +995,21 @@ class Cell:
 class TableSplit:
   """
   Defines a table split
-  
+
   <dl>
     <dt>start_row</dt>
     <dd>Starting row of the split.</dd>
-  
+
     <dt>end_row</dt>
     <dd>Ending row of the split.</dd>
-  
+
     <dt>location</dt>
     <dd>Location (proxy name) of the split.</dd>
-  
+
     <dt>ip_address</dt>
     <dd>The IP address of the split.</dd>
   </dl>
-  
+
   Attributes:
    - start_row
    - end_row
@@ -864,10 +1019,10 @@ class TableSplit:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'start_row', None, None, ), # 1
-    (2, TType.STRING, 'end_row', None, None, ), # 2
-    (3, TType.STRING, 'location', None, None, ), # 3
-    (4, TType.STRING, 'ip_address', None, None, ), # 4
+    (1, TType.STRING, 'start_row', None, None,), # 1
+    (2, TType.STRING, 'end_row', None, None,), # 2
+    (3, TType.STRING, 'location', None, None,), # 3
+    (4, TType.STRING, 'ip_address', None, None,), # 4
   )
 
   def __init__(self, start_row=None, end_row=None, location=None, ip_address=None,):
@@ -933,6 +1088,9 @@ class TableSplit:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -951,17 +1109,17 @@ class ColumnFamily:
   <dl>
     <dt>name</dt>
     <dd>Name of the column family</dd>
-  
+
     <dt>ag</dt>
     <dd>Name of the access group for this CF</dd>
-  
+
     <dt>max_versions</dt>
     <dd>Max versions of the same cell to be stored</dd>
-  
+
     <dt>ttl</dt>
     <dd>Time to live for cells in the CF (ie delete cells older than this time)</dd>
   </dl>
-  
+
   Attributes:
    - name
    - ag
@@ -971,10 +1129,10 @@ class ColumnFamily:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'name', None, None, ), # 1
-    (2, TType.STRING, 'ag', None, None, ), # 2
-    (3, TType.I32, 'max_versions', None, None, ), # 3
-    (4, TType.STRING, 'ttl', None, None, ), # 4
+    (1, TType.STRING, 'name', None, None,), # 1
+    (2, TType.STRING, 'ag', None, None,), # 2
+    (3, TType.I32, 'max_versions', None, None,), # 3
+    (4, TType.STRING, 'ttl', None, None,), # 4
   )
 
   def __init__(self, name=None, ag=None, max_versions=None, ttl=None,):
@@ -1040,6 +1198,9 @@ class ColumnFamily:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -1058,26 +1219,26 @@ class AccessGroup:
   <dl>
     <dt>name</dt>
     <dd>Name of the access group</dd>
-  
+
     <dt>in_memory</dt>
     <dd>Is this access group in memory</dd>
-  
+
     <dt>replication</dt>
     <dd>Replication factor for this AG</dd>
-  
+
     <dt>blocksize</dt>
     <dd>Specifies blocksize for this AG</dd>
-  
+
     <dt>compressor</dt>
     <dd>Specifies compressor for this AG</dd>
-  
+
     <dt>bloom_filter</dt>
     <dd>Specifies bloom filter type</dd>
-  
+
     <dt>columns</dt>
     <dd>Specifies list of column families in this AG</dd>
   </dl>
-  
+
   Attributes:
    - name
    - in_memory
@@ -1090,13 +1251,13 @@ class AccessGroup:
 
   thrift_spec = (
     None, # 0
-    (1, TType.STRING, 'name', None, None, ), # 1
-    (2, TType.BOOL, 'in_memory', None, None, ), # 2
-    (3, TType.I16, 'replication', None, None, ), # 3
-    (4, TType.I32, 'blocksize', None, None, ), # 4
-    (5, TType.STRING, 'compressor', None, None, ), # 5
-    (6, TType.STRING, 'bloom_filter', None, None, ), # 6
-    (7, TType.LIST, 'columns', (TType.STRUCT,(ColumnFamily, ColumnFamily.thrift_spec)), None, ), # 7
+    (1, TType.STRING, 'name', None, None,), # 1
+    (2, TType.BOOL, 'in_memory', None, None,), # 2
+    (3, TType.I16, 'replication', None, None,), # 3
+    (4, TType.I32, 'blocksize', None, None,), # 4
+    (5, TType.STRING, 'compressor', None, None,), # 5
+    (6, TType.STRING, 'bloom_filter', None, None,), # 6
+    (7, TType.LIST, 'columns', (TType.STRUCT, (ColumnFamily, ColumnFamily.thrift_spec)), None,), # 7
   )
 
   def __init__(self, name=None, in_memory=None, replication=None, blocksize=None, compressor=None, bloom_filter=None, columns=None,):
@@ -1201,6 +1362,9 @@ class AccessGroup:
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -1219,26 +1383,26 @@ class Schema:
   <dl>
     <dt>name</dt>
     <dd>Name of the access group</dd>
-  
+
     <dt>in_memory</dt>
     <dd>Is this access group in memory</dd>
-  
+
     <dt>replication</dt>
     <dd>Replication factor for this AG</dd>
-  
+
     <dt>blocksize</dt>
     <dd>Specifies blocksize for this AG</dd>
-  
+
     <dt>compressor</dt>
     <dd>Specifies compressor for this AG</dd>
-  
+
     <dt>bloom_filter</dt>
     <dd>Specifies bloom filter type</dd>
-  
+
     <dt>columns</dt>
     <dd>Specifies list of column families in this AG</dd>
   </dl>
-  
+
   Attributes:
    - access_groups
    - column_families
@@ -1246,8 +1410,8 @@ class Schema:
 
   thrift_spec = (
     None, # 0
-    (1, TType.MAP, 'access_groups', (TType.STRING,None,TType.STRUCT,(AccessGroup, AccessGroup.thrift_spec)), None, ), # 1
-    (2, TType.MAP, 'column_families', (TType.STRING,None,TType.STRUCT,(ColumnFamily, ColumnFamily.thrift_spec)), None, ), # 2
+    (1, TType.MAP, 'access_groups', (TType.STRING, None, TType.STRUCT, (AccessGroup, AccessGroup.thrift_spec)), None,), # 1
+    (2, TType.MAP, 'column_families', (TType.STRING, None, TType.STRUCT, (ColumnFamily, ColumnFamily.thrift_spec)), None,), # 2
   )
 
   def __init__(self, access_groups=None, column_families=None,):
@@ -1266,7 +1430,7 @@ class Schema:
       if fid == 1:
         if ftype == TType.MAP:
           self.access_groups = {}
-          (_ktype29, _vtype30, _size28 ) = iprot.readMapBegin() 
+          (_ktype29, _vtype30, _size28) = iprot.readMapBegin() 
           for _i32 in xrange(_size28):
             _key33 = iprot.readString();
             _val34 = AccessGroup()
@@ -1278,7 +1442,7 @@ class Schema:
       elif fid == 2:
         if ftype == TType.MAP:
           self.column_families = {}
-          (_ktype36, _vtype37, _size35 ) = iprot.readMapBegin() 
+          (_ktype36, _vtype37, _size35) = iprot.readMapBegin() 
           for _i39 in xrange(_size35):
             _key40 = iprot.readString();
             _val41 = ColumnFamily()
@@ -1300,7 +1464,7 @@ class Schema:
     if self.access_groups != None:
       oprot.writeFieldBegin('access_groups', TType.MAP, 1)
       oprot.writeMapBegin(TType.STRING, TType.STRUCT, len(self.access_groups))
-      for kiter42,viter43 in self.access_groups.items():
+      for kiter42, viter43 in self.access_groups.items():
         oprot.writeString(kiter42)
         viter43.write(oprot)
       oprot.writeMapEnd()
@@ -1308,13 +1472,16 @@ class Schema:
     if self.column_families != None:
       oprot.writeFieldBegin('column_families', TType.MAP, 2)
       oprot.writeMapBegin(TType.STRING, TType.STRUCT, len(self.column_families))
-      for kiter44,viter45 in self.column_families.items():
+      for kiter44, viter45 in self.column_families.items():
         oprot.writeString(kiter44)
         viter45.write(oprot)
       oprot.writeMapEnd()
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __repr__(self):
     L = ['%s=%r' % (key, value)
@@ -1330,15 +1497,15 @@ class Schema:
 class ClientException(Exception):
   """
   Exception for thrift clients.
-  
+
   <dl>
     <dt>code</dt><dd>Internal use (defined in src/cc/Common/Error.h)</dd>
     <dt>message</dt><dd>A message about the exception</dd>
   </dl>
-  
+
   Note: some languages (like php) don't have adequate namespace, so Exception
   would conflict with language builtins.
-  
+
   Attributes:
    - code
    - message
@@ -1346,8 +1513,8 @@ class ClientException(Exception):
 
   thrift_spec = (
     None, # 0
-    (1, TType.I32, 'code', None, None, ), # 1
-    (2, TType.STRING, 'message', None, None, ), # 2
+    (1, TType.I32, 'code', None, None,), # 1
+    (2, TType.STRING, 'message', None, None,), # 2
   )
 
   def __init__(self, code=None, message=None,):
@@ -1393,6 +1560,9 @@ class ClientException(Exception):
       oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
+    def validate(self):
+      return
+
 
   def __str__(self):
     return repr(self)
@@ -1407,4 +1577,3 @@ class ClientException(Exception):
 
   def __ne__(self, other):
     return not (self == other)
-
