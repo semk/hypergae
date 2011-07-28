@@ -2,7 +2,7 @@
 #
 # Datastore implementation for Hypertable.
 #	It should be registered by 
-#		apiproxy_stub_map.apiproxy.RegisterStub('datastore', DatastoreStub())
+#		apiproxy_stub_map.apiproxy.RegisterStub('datastore', DatastoreStub(<args>))
 #
 # @author: Sreejith K
 # Created on 27th March 2010
@@ -26,6 +26,8 @@ from google.appengine.api import namespace_manager
 
 import __builtin__
 buffer = __builtin__.buffer
+
+log = logging.getLogger(__name__)
 
 _MAXIMUM_RESULTS = 1000
 _MAX_QUERY_OFFSET = 1000
@@ -321,7 +323,7 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 
 
 	def __init__(self, app_id,
-				ht_config='/etc/cyclozzo/hypertable.cfg',
+				ht_config='/opt/hypertable/current/hypertable.cfg',
 				service_name='datastore_v3',
 				trusted=False):
 		"""
@@ -345,8 +347,32 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		self.__client = ht.Client(ht_config)
 		self.__trusted = trusted
 		self.__queries = {}
+		
+		self.__id_lock = threading.Lock()
+		self.__id_map = {}
+
+		# transaction support
+		self.__next_tx_handle = 1
+		self.__tx_writes = {}
+		self.__tx_deletes = set()
+		self.__tx_actions = []
+		self.__tx_lock = threading.Lock()
 
 		super(HypertableStub, self).__init__(service_name)
+
+	def Clear(self):
+		"""Clears the datastore.
+		
+		This is mainly for testing purposes and the admin console.
+		"""
+		self.__queries = {}
+		self.__query_history = {}
+		self.__indexes = {}
+		self.__id_map = {}
+		self.__next_tx_handle = 1
+		self.__tx_writes = {}
+		self.__tx_deletes = set()
+		self.__tx_actions = []
 
 	def _Create_Obj_Datastore(self, kind, namespace):
 		namespace = '%s/%s' %(self.__app_id, namespace)
@@ -356,6 +382,9 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		
 		if not ns.exists_table(kind):
 			ns.create_table(kind, self.__schema)
+		
+		table = ns.open_table(kind)
+		return (ns, table)
 		
 	def _AppIdNamespaceKindForKey(self, key):
 		""" Get (app, kind) tuple from given key.
@@ -424,13 +453,113 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 					'each key path element should have id or name but not both: %r'
 					% key)
 
+	def __get_cells(self, table, key):
+		"""Get the Hypertable cells having the key
+		"""
+		scan_spec_builder = ht.ScanSpecBuilder()
+		scan_spec_builder.add_row_interval(key, True, key, True)
+		scan_spec_builder.set_max_versions(1)
+		scan_spec_builder.set_row_limit(0)
+		cells = [cell for cell in table.create_scanner(scan_spec_builder)]
+		return cells
+	
+	def __set_cell(self, table, key, family, qualifier, value):
+		"""Set the Hypertable cells with the provided keys and values
+		"""
+		mutator = table.create_mutator()
+		mutator.set(key, family, qualifier, value)
+
+	def __AllocateIds(self, kind, size=None, max=None):
+		"""Allocates IDs.
+
+		Args:
+			kind: A kind.
+			size: Number of IDs to allocate.
+			max: Upper bound of IDs to allocate.
+
+		Returns:
+			Integer as the beginning of a range of size IDs.
+		"""
+		self.__id_lock.acquire()
+		ret = None
+		_id = 'IdSeq_%s' % kind
+		
+		ns, table = self._Create_Obj_Datastore('datastore', '')
+		
+		try:
+			current_next_id = int(self.__get_cells(table, _id)[0].value)
+		except:
+			current_next_id = 0
+		
+		if not current_next_id:
+			self.__set_cell(table, _id, 'meta', 'next_id', '1')
+			current_next_id = 1
+		if size is not None:
+			assert size > 0
+			next_id, block_size = self.__id_map.get(kind, (0, 0))
+			if not block_size:
+				block_size = (size / 1000 + 1) * 1000
+				incr = next_id + block_size
+				self.__set_cell(table, _id, 'meta', 'next_id', str(current_next_id + incr))
+				next_id = current_next_id + incr
+				current_next_id += incr
+			if size > block_size:
+				incr = size
+				self.__set_cell(table, _id, 'meta', 'next_id', str(current_next_id + incr))
+				ret = current_next_id + incr
+				current_next_id += incr
+			else:
+				ret = next_id;
+				next_id += size
+				block_size -= size
+				self.__id_map[kind] = (next_id, block_size)
+		else:
+			next_id_from_cell = int(self.__get_cells(table, _id)[0].value)
+			if max and max >= next_id_from_cell:
+				self.__set_cell(table, _id, 'meta', 'next_id', str(max+1))
+		self.__id_lock.release()
+		return ret
+
 	def __GenerateNewKey(self, kind):
 		return datastore_types.Key.from_path( kind, str(uuid.uuid4()).replace('-', ''), _app=self.__app_id )
 
+	def __PutEntities(self, entities):
+		"""Inserts or updates entities in the DB.
+		
+		Args:
+			entities: A list of entities to store.
+		"""
+		for entity in entities:
+			kind = self.__GetEntityKind(entity)
+			namespace = entity.key().name_space()
+			# create table for this kind if not created already.
+			ns, table = self._Create_Obj_Datastore(kind, namespace)
+			key = datastore_types.Key._FromPb(entity.key())
+			# encode the key
+			encoded_key = str(key)
+			self.__set_cell(table, encoded_key, 'entity', 'proto', str(buffer(entity.Encode())))
+
+	def __DeleteEntities(self, keys):
+		"""Deletes entities from the DB.
+		
+		Args:
+			keys: A list of keys to delete index entries for.
+		Returns:
+			The number of rows deleted.
+		"""
+		keys = [datastore_types.Key._FromPb(key) for key in keys]
+		for key in keys:
+			kind, namespace = key.kind(), key.namespace()
+			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, str(namespace)))
+			table = ns.open_table(str(kind))
+			mutator = table.create_mutator()
+			key = str(key)
+			log.debug('deleting cells with key: %s' %key)
+			# delete cells with this key
+			mutator.set_delete(key, 'entity', 'proto')
+
 	def _Dynamic_Put(self, put_request, put_response):
 		entities = put_request.entity_list()
-		kind_cells_dict = {}
-
 		for entity in entities:
 			self.__ValidateKey(entity.key())
 			
@@ -443,8 +572,8 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			
 			last_path = entity.key().path().element_list()[-1]
 			if last_path.id() == 0 and not last_path.has_name():
-				#id_ = self.__AllocateIds(conn, self._GetTablePrefix(entity.key()), 1)
-				#last_path.set_id(id_)
+				id_ = self.__AllocateIds(last_path.type(), 1)
+				last_path.set_id(id_)
 				
 				assert entity.entity_group().element_size() == 0
 				group = entity.mutable_entity_group()
@@ -454,60 +583,27 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				assert (entity.has_entity_group() and
 					entity.entity_group().element_size() > 0)
 			
-			kind = self.__GetEntityKind(entity)
-			namespace = entity.key().name_space()
-			# create table for this kind if not created already.
-			self._Create_Obj_Datastore(kind, namespace)
-			
-			index = (kind, namespace)
-			if kind_cells_dict.has_key(index):
-				kind_cells_dict[index].append(entity)
-			else:
-				kind_cells_dict[index] = [entity]
-
-		put_keys = []
-		for kind, namespace in kind_cells_dict.keys():
-			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, namespace)) 
-			table = ns.open_table(kind)
-			mutator = table.create_mutator()
-			entities = kind_cells_dict[(kind, namespace)]
-			for entity in entities:
-				try:
-					logging.debug('using provided key')
-					key = datastore_types.Key._FromPb(entity.key())
-					# encode the key
-					encoded_key = str(key)
-				except datastore_errors.BadKeyError:
-					logging.debug('generating a new key')
-					# generate the key for this entity
-					key = self.__GenerateNewKey(kind)
-					# encode the key
-					encoded_key = str(key)
-				logging.debug('encoded key: %r' %encoded_key)
-				mutator.set(encoded_key, 'entity', 'proto', str(buffer(entity.Encode())))
-				put_keys.append(key._ToPb())
-		put_response.key_list().extend(put_keys)
+			if put_request.transaction().handle():
+				self.__tx_writes[entity.key()] = entity
+				self.__tx_deletes.discard(entity.key())
+		
+		if not put_request.transaction().handle():
+			self.__PutEntities(entities)
+		
+		put_response.key_list().extend([e.key() for e in entities])
 
 	
 	def _Dynamic_Delete(self, delete_request, delete_response):
-		keys = [datastore_types.Key._FromPb(key) for key in delete_request.key_list()]
-		kind_keys_dict = {}
+		keys = delete_request.key_list()
 		for key in keys:
-			index = (key.kind(), key.namespace())
-			if kind_keys_dict.has_key(index):
-				kind_keys_dict[index].append(key)
-			else:
-				kind_keys_dict[index] = [key]
-
-		for kind, namespace in kind_keys_dict:
-			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, str(namespace)))
-			table = ns.open_table(str(kind))
-			mutator = table.create_mutator()
-			for this_key in kind_keys_dict[(kind, namespace)]:
-				this_key = str(this_key)
-				logging.debug('deleting cells with key: %s' %this_key)
-				# delete cells with this key
-				mutator.set_delete(this_key, 'entity', 'proto')
+			self.__ValidateAppId(key.app())
+			if delete_request.transaction().handle():
+				self.__tx_deletes.add(key)
+				self.__tx_writes.pop(key, None)
+		
+		if not delete_request.transaction().handle():
+			self.__DeleteEntities(delete_request.key_list())
+		
 
 	def _Dynamic_Drop(self, drop_request, drop_response):
 		kind = drop_request.kind
@@ -516,46 +612,31 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, namespace))
 			ns.drop_table(kind)
 		except RuntimeError:
-			logging.warning('drop_table: No table named %s in namespace: %s' %(kind, namespace))
+			log.warning('drop_table: No table named %s in namespace: %s' %(kind, namespace))
 	
 	def _Dynamic_Get(self, get_request, get_response):
-		keys = get_request.key_list()
-		kind_keys_dict = {}
-		
-		for key in keys:
+		for key in get_request.key_list():
 			appid_namespace, kind = self._AppIdNamespaceKindForKey(key)
 			namespace = appid_namespace.rsplit('!', 1)[1] if '!' in appid_namespace else ''
-			index = (kind, namespace)
-			if kind_keys_dict.has_key(index):
-				kind_keys_dict[index].append(key)
-			else:
-				kind_keys_dict[index] = [key]
-		
-		entities = []
-		for kind, namespace in kind_keys_dict:
-			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, namespace))
-			
+
 			try:
+				ns = self.__client.open_namespace('%s/%s' %(self.__app_id, namespace))
 				table = ns.open_table(kind)
 			except RuntimeError:
-				logging.warning('No data for %s' %kind)
+				log.warning('No data for %s' %kind)
+				group = get_response.add_entity()
 				continue
 
-			for key in kind_keys_dict[(kind, namespace)]:
-				key_pb = key
-				key = datastore_types.Key._FromPb(key)
-				scan_spec_builder = ht.ScanSpecBuilder()
-				scan_spec_builder.add_row_interval(str(key), True, str(key), True)
-				scan_spec_builder.set_max_versions(1)
-				scan_spec_builder.set_row_limit(0)
-				total_cells = [cell for cell in table.create_scanner(scan_spec_builder)]
+			key_pb = key
+			key = datastore_types.Key._FromPb(key)
+			total_cells = self.__get_cells(table, str(key))
 
-				for cell in total_cells:
-					if cell.column_family == 'entity' and cell.column_qualifier == 'proto':
-						entity_proto = entity_pb.EntityProto(str(cell.value))
-						entity_proto.mutable_key().CopyFrom(key_pb)
-						group = get_response.add_entity()
-						group.mutable_entity().CopyFrom(entity_proto)
+			group = get_response.add_entity()
+			for cell in total_cells:
+				if cell.column_family == 'entity' and cell.column_qualifier == 'proto':
+					entity_proto = entity_pb.EntityProto(str(cell.value))
+					entity_proto.mutable_key().CopyFrom(key_pb)
+					group.mutable_entity().CopyFrom(entity_proto)
 
 	def _Dynamic_RunQuery(self, query, query_result):
 		kind = query.kind()
@@ -570,7 +651,7 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 			ns = self.__client.open_namespace('%s/%s' %(self.__app_id, namespace))
 			table = ns.open_table(kind)
 		except RuntimeError:
-			logging.warning('No data for %s' %kind)
+			log.warning('No data for %s' %kind)
 			return
 
 		scan_spec_builder = ht.ScanSpecBuilder()
@@ -738,7 +819,6 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 				return cmp(x_type, y_type)
 	
 		results.sort(order_compare_entities)
-
 		cursor = _Cursor(query, results, order_compare_entities)
 		self.__queries[cursor.cursor] = cursor
 	
@@ -783,3 +863,78 @@ class HypertableStub(apiproxy_stub.APIProxyStub):
 		cursor = query_result.cursor().cursor()
 		integer64proto.set_value(min(self.__queries[cursor].count, _MAXIMUM_RESULTS))
 		del self.__queries[cursor]
+
+	def __ValidateTransaction(self, tx):
+		"""Verify that this transaction exists and is valid.
+		
+		Args:
+			tx: datastore_pb.Transaction
+		
+		Raises:
+			datastore_errors.BadRequestError: if the tx is valid or doesn't exist.
+		"""
+		assert isinstance(tx, datastore_pb.Transaction)
+		self.__ValidateAppId(tx.app())
+
+	def _Dynamic_BeginTransaction(self, request, transaction):
+		self.__ValidateAppId(request.app())
+		
+		self.__tx_lock.acquire()
+		handle = self.__next_tx_handle
+		self.__next_tx_handle += 1
+		
+		transaction.set_app(request.app())
+		transaction.set_handle(handle)
+		
+		self.__tx_actions = []
+	
+	def _Dynamic_AddActions(self, request, _):
+		"""Associates the creation of one or more tasks with a transaction.
+		
+		Args:
+			request: A taskqueue_service_pb.TaskQueueBulkAddRequest containing the
+				tasks that should be created when the transaction is comitted.
+		"""
+		if ((len(self.__tx_actions) + request.add_request_size()) >
+				_MAX_ACTIONS_PER_TXN):
+			raise apiproxy_errors.ApplicationError(
+							datastore_pb.Error.BAD_REQUEST,
+							'Too many messages, maximum allowed %s' % _MAX_ACTIONS_PER_TXN)
+		
+		new_actions = []
+		for add_request in request.add_request_list():
+			self.__ValidateTransaction(add_request.transaction())
+			clone = taskqueue_service_pb.TaskQueueAddRequest()
+			clone.CopyFrom(add_request)
+			clone.clear_transaction()
+			new_actions.append(clone)
+		
+		self.__tx_actions.extend(new_actions)
+		
+	def _Dynamic_Commit(self, transaction, transaction_response):
+		self.__ValidateTransaction(transaction)
+		
+		try:
+			self.__PutEntities(self.__tx_writes.values())
+			self.__DeleteEntities(self.__tx_deletes)
+			for action in self.__tx_actions:
+				try:
+				  apiproxy_stub_map.MakeSyncCall(
+					  'taskqueue', 'Add', action, api_base_pb.VoidProto())
+				except apiproxy_errors.ApplicationError, e:
+			 		logging.warning('Transactional task %s has been dropped, %s',
+							  action, e)
+			 		pass
+		finally:
+			self.__tx_writes = {}
+			self.__tx_deletes = set()
+			self.__tx_actions = []
+			self.__tx_lock.release()
+			
+	def _Dynamic_Rollback(self, transaction, transaction_response):
+		self.__ValidateTransaction(transaction)
+		
+		self.__tx_writes = {}
+		self.__tx_deletes = set()
+		self.__tx_actions = []
+		self.__tx_lock.release()
